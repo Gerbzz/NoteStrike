@@ -16,9 +16,9 @@ NoteStrike keeps a Markdown notebook on your own machine. Create and edit notes,
 
 Windows alpha source. The notebook core and optional native editor passed bounded local checks, including a conflict-recovery case. Native pointer and accessibility behavior, attachments, backup and restore, and installer packaging remain open.
 
-## Keep a notebook
+## Keep links through a rename
 
-Create a note, write in Markdown, and find it again by searching its title or body. Rename notes without losing their stable identity, and follow backlinks to see related writing. If an outside edit conflicts with a save, the current core preserves a recovery copy.
+Each note has a stable ID, so a title change does not erase its backlinks. Search covers titles and bodies. When an outside edit collides with a save, the current core leaves a staged recovery copy instead of silently replacing the changed note.
 
 ## Build and verification
 
