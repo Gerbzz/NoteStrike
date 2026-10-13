@@ -1,4 +1,26 @@
-# NoteStrike Windows alpha
+# NoteStrike
+
+**by PWDS**
+
+**Keep notes connected.**
+
+NoteStrike keeps a Markdown notebook on your own machine. Create and edit notes, search titles and bodies, rename entries, and follow stable links between related ideas.
+
+### Highlights
+
+- Write and organize local Markdown notes.
+- Search titles and note text.
+- Follow backlinks across the notebook.
+
+## Current status
+
+Windows alpha source. The notebook core and optional native editor passed bounded local checks, including a conflict-recovery case. Native pointer and accessibility behavior, attachments, backup and restore, and installer packaging remain open.
+
+## Keep a notebook
+
+Create a note, write in Markdown, and find it again by searching its title or body. Rename notes without losing their stable identity, and follow backlinks to see related writing. If an outside edit conflicts with a save, the current core preserves a recovery copy.
+
+## Build and verification
 
 NoteStrike is a local Rust Markdown notebook prototype. The command-line app creates notes, edits and renames them, searches local titles and bodies, and follows stable-ID backlinks. The optional native Windows editor provides note list/search, body edit/save, rename, backlinks, conflict-copy, and disk reload through the same notebook core.
 
