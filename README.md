@@ -6,7 +6,7 @@
 
 NoteStrike keeps a Markdown notebook on your own machine. Create and edit notes, search titles and bodies, rename entries, and follow stable links between related ideas.
 
-### Highlights
+## Highlights
 
 - Write and organize local Markdown notes.
 - Search titles and note text.
