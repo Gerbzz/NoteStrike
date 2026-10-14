@@ -1,6 +1,9 @@
 //! Native editor adapter for the local notebook core.
 
+use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use uuid::Uuid;
@@ -18,6 +21,15 @@ pub struct NativeEditor {
     dirty: bool,
     preview: bool,
     status: String,
+    capture: Option<CaptureOnce>,
+}
+
+struct CaptureOnce {
+    path: PathBuf,
+    outcome: Arc<Mutex<Option<Result<(), String>>>>,
+    started: Instant,
+    settle_frames: u8,
+    requested: bool,
 }
 
 impl NativeEditor {
@@ -43,7 +55,94 @@ impl NativeEditor {
             } else {
                 format!("{warning_count} note file(s) need repair; valid notes remain available.")
             },
+            capture: None,
         }
+    }
+
+    /// Capture one fully painted editor frame, then close the capture window.
+    pub fn capture_once(&mut self, path: PathBuf) -> Arc<Mutex<Option<Result<(), String>>>> {
+        let outcome = Arc::new(Mutex::new(None));
+        self.capture = Some(CaptureOnce {
+            path,
+            outcome: Arc::clone(&outcome),
+            started: Instant::now(),
+            settle_frames: 0,
+            requested: false,
+        });
+        outcome
+    }
+
+    fn write_capture_png(
+        path: &std::path::Path,
+        screenshot: &egui::ColorImage,
+    ) -> Result<(), String> {
+        let [width, height] = screenshot.size;
+        let bytes = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or("Screenshot dimensions overflow")?;
+        let mut pixels = Vec::with_capacity(bytes);
+        for color in &screenshot.pixels {
+            pixels.extend_from_slice(&color.to_array());
+        }
+        if pixels.len() != bytes {
+            return Err("Screenshot pixel count does not match its dimensions".into());
+        }
+        let width = u32::try_from(width).map_err(|_| "Screenshot width exceeds PNG limits")?;
+        let height = u32::try_from(height).map_err(|_| "Screenshot height exceeds PNG limits")?;
+        let image = image::RgbaImage::from_raw(width, height, pixels)
+            .ok_or("Could not construct screenshot image")?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|error| format!("Create screenshot {}: {error}", path.display()))?;
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut file, image::ImageFormat::Png)
+            .map_err(|error| format!("Encode screenshot: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("Sync screenshot: {error}"))?;
+        Ok(())
+    }
+
+    fn finish_capture(&mut self, ctx: &egui::Context, result: Result<(), String>) {
+        if let Some(capture) = self.capture.take() {
+            *capture.outcome.lock().unwrap() = Some(result);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    fn capture_after_frame(&mut self, ctx: &egui::Context) {
+        let Some(capture) = self.capture.as_ref() else {
+            return;
+        };
+        if capture.started.elapsed() > Duration::from_secs(15) {
+            self.finish_capture(ctx, Err("Timed out waiting for a native screenshot".into()));
+            return;
+        }
+        if capture.requested {
+            let image = ctx.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Screenshot { image, .. } => Some(Arc::clone(image)),
+                    _ => None,
+                })
+            });
+            if let Some(image) = image {
+                let result = Self::write_capture_png(&capture.path, &image);
+                self.finish_capture(ctx, result);
+            } else {
+                ctx.request_repaint();
+            }
+            return;
+        }
+        let capture = self.capture.as_mut().unwrap();
+        if capture.settle_frames < 2 {
+            capture.settle_frames += 1;
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            capture.requested = true;
+        }
+        ctx.request_repaint();
     }
 
     fn select(&mut self, id: Uuid) {
@@ -321,6 +420,7 @@ impl NativeEditor {
 
 impl eframe::App for NativeEditor {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         if ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::S))
             && self.dirty
         {
@@ -331,6 +431,7 @@ impl eframe::App for NativeEditor {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.strong("NoteStrike");
+                    ui.label(egui::RichText::new("by PWDS").small().weak());
                     ui.separator();
                     ui.label(self.root.display().to_string());
                     ui.separator();
@@ -344,6 +445,7 @@ impl eframe::App for NativeEditor {
             .exact_size(240.0)
             .show(ui, |ui| self.context_rail(ui));
         egui::CentralPanel::default().show(ui, |ui| self.editor(ui));
+        self.capture_after_frame(&ctx);
     }
 }
 

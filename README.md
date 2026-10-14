@@ -21,6 +21,12 @@ NoteStrike keeps a Markdown notebook on your own machine. Create and edit notes,
 - Search titles and note text.
 - Follow backlinks across the notebook.
 
+## Native editor preview
+
+![NoteStrike native editor showing a synthetic Field Log notebook](assets/screenshots/note-editor.png)
+
+This is an app-rendered capture of the current native editor with two self-authored sample notes. The [screenshot provenance](docs/SCREENSHOT_PROVENANCE.md) records its scope and hashes.
+
 ## Current status
 
 Windows alpha source. The notebook core and optional native editor passed bounded local checks, including a conflict-recovery case. Native pointer and accessibility behavior, attachments, backup and restore, and installer packaging remain open.
@@ -37,7 +43,8 @@ From this standalone source root:
 
 ```powershell
 cargo test --locked --features native-ui
-cargo run --locked --features native-ui --bin notestrike-native
+cargo run --locked --bin notestrike -- init demo-notebook
+cargo run --locked --features native-ui --bin notestrike-native -- demo-notebook
 ```
 
 The lockfile was derived from the tested Office lock without adding package versions. A fresh checkout needs ordinary crates.io access for uncached dependencies. The accepted Windows checkpoint passed nine integration tests, and its compiled native action test passed 100 consecutive reruns. An independent reproduction confirmed that an external edit made during the Windows rename retry remains on disk, returns a conflict, and leaves the staged recovery copy available.

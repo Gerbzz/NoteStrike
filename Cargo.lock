@@ -1688,6 +1688,7 @@ name = "notestrike"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
  "same-file",
  "serde_json",
  "sha2",
