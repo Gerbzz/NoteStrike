@@ -1,21 +1,70 @@
 {
   "app": "NoteStrike",
   "asset": "assets/branding/NoteStrike.png",
-  "method": "Lossless rectangular extraction of original pixels with ImageMagick. No scaling, recoloring, tracing, generation, transparency fabrication or animal changes. Original cream outside rounded corners retained. Labels excluded.",
-  "coordinate_system": "Origin top-left; crop bounds [left, top, right, bottom), right/bottom exclusive.",
-  "source_sha256": "ffbe34cd3370ce5c475089de7cfdbc155597422dc4cc9269578d3c2000a63fd8",
-  "crop_bounds": [
-    696,
-    0,
-    1352,
-    656
-  ],
+  "method": "Measured rounded alpha mask applied to the original 656x656 logo tile, then translated by whole pixels to center its visible bounds. Original visible RGB and masked visible RGBA were verified unchanged.",
+  "source_tile": {
+    "repository": "Gerbzz/NoteStrike",
+    "commit": "842ee349d4aa7edc7e701faab1fefd6bf601e317",
+    "path": "assets/branding/NoteStrike.png",
+    "sha256": "2795cd0a5c0110f900cb01363b18dde22c7b66f217e3512976e5fbe6385cdb2a",
+    "git_blob_sha": "39a5bdfcc396be1b57836768a494b589946a4c93"
+  },
+  "mask_and_centering": {
+    "inset_pixels": 1.5,
+    "masked_alpha_bbox": [
+      21,
+      23,
+      637,
+      641
+    ],
+    "centered_alpha_bbox": [
+      20,
+      19,
+      636,
+      637
+    ],
+    "integer_translation": [
+      -1,
+      -4
+    ],
+    "padding_ltrb": [
+      20,
+      19,
+      20,
+      19
+    ],
+    "original_visible_rgb_exact": true,
+    "masked_visible_rgba_exact": true,
+    "transparent_corners": true
+  },
   "dimensions": [
     656,
     656
   ],
-  "sha256": "2795cd0a5c0110f900cb01363b18dde22c7b66f217e3512976e5fbe6385cdb2a",
-  "decoded_rgb_sha256": "990e33369c912ecc54fd2162d9e03c8709429f8b1ae93b6ce3e30509fa2946e8",
-  "pixel_equality_verified": true,
-  "git_blob_sha": "39a5bdfcc396be1b57836768a494b589946a4c93"
+  "mode": "RGBA",
+  "sha256": "5080e6f31e7319b14985d1dd0e6193d0241b4fc8702cf8641966f4e2a6c8b818",
+  "decoded_rgba_sha256": "46286c4ec4e8fa13f79ee74bd30d414425377b26be927776de66b8f6c55127f8",
+  "git_blob_sha": "94e0293929d0a71608fda3fa6cd01903161817bc",
+  "tool": "ImageMagick 7.1.2-34 Q16 x64",
+  "original_tile_provenance": {
+    "app": "NoteStrike",
+    "asset": "assets/branding/NoteStrike.png",
+    "method": "Lossless rectangular extraction of original pixels with ImageMagick. No scaling, recoloring, tracing, generation, transparency fabrication or animal changes. Original cream outside rounded corners retained. Labels excluded.",
+    "coordinate_system": "Origin top-left; crop bounds [left, top, right, bottom), right/bottom exclusive.",
+    "source_sha256": "ffbe34cd3370ce5c475089de7cfdbc155597422dc4cc9269578d3c2000a63fd8",
+    "crop_bounds": [
+      696,
+      0,
+      1352,
+      656
+    ],
+    "dimensions": [
+      656,
+      656
+    ],
+    "sha256": "2795cd0a5c0110f900cb01363b18dde22c7b66f217e3512976e5fbe6385cdb2a",
+    "decoded_rgb_sha256": "990e33369c912ecc54fd2162d9e03c8709429f8b1ae93b6ce3e30509fa2946e8",
+    "pixel_equality_verified": true,
+    "git_blob_sha": "39a5bdfcc396be1b57836768a494b589946a4c93"
+  }
 }
