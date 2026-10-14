@@ -1,6 +1,11 @@
 # NoteStrike
 
-**by PWDS**
+<p align="center">
+  <a href="https://prowebdevsolutions.com"><picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/PWDS-logo-orange.svg">
+    <img src="assets/branding/PWDS-logo.png" alt="PWDS company logo" width="120">
+  </picture></a>
+</p>
 
 **Keep notes connected.**
 
@@ -36,3 +41,7 @@ The lockfile was derived from the tested Office lock without adding package vers
 Current limits: native pointer, focus, screen-reader, and accessibility behavior were not accepted; attachments, a recovery-choice UI, FTS index, and backup/restore are incomplete. The final path-identity check and rename are not an atomic compare-and-swap against an adversarial path replacement. Other platforms and installers have not been verified. No installer is supported by this source checkpoint.
 
 Tests generate disposable Markdown notebooks in the system temporary directory; no user notes are included. See [SOURCE_SCOPE.md](SOURCE_SCOPE.md) for dependency attribution and ownership. No first-party license grant is stated for NoteStrike here.
+
+## PWDS brand artwork
+
+The company mark in this masthead is the existing [official PWDS logo](https://github.com/Gerbzz/PWDS-Website/blob/main/public/prowebdevsolutions-logo.png), with the [official orange display asset](https://prowebdevsolutions.com/images/prowebdevsolutions-logo-orange.svg) for dark backgrounds. Any app logo above it remains the original Strike suite artwork.
