@@ -1,0 +1,21 @@
+{
+  "app": "NoteStrike",
+  "asset": "assets/branding/NoteStrike.png",
+  "method": "Lossless rectangular extraction of original pixels with ImageMagick. No scaling, recoloring, tracing, generation, transparency fabrication or animal changes. Original cream outside rounded corners retained. Labels excluded.",
+  "coordinate_system": "Origin top-left; crop bounds [left, top, right, bottom), right/bottom exclusive.",
+  "source_sha256": "ffbe34cd3370ce5c475089de7cfdbc155597422dc4cc9269578d3c2000a63fd8",
+  "crop_bounds": [
+    696,
+    0,
+    1352,
+    656
+  ],
+  "dimensions": [
+    656,
+    656
+  ],
+  "sha256": "2795cd0a5c0110f900cb01363b18dde22c7b66f217e3512976e5fbe6385cdb2a",
+  "decoded_rgb_sha256": "990e33369c912ecc54fd2162d9e03c8709429f8b1ae93b6ce3e30509fa2946e8",
+  "pixel_equality_verified": true,
+  "git_blob_sha": "39a5bdfcc396be1b57836768a494b589946a4c93"
+}
