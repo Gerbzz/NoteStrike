@@ -703,9 +703,11 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
     }
+
     #[test]
     fn long_source_scrolls_to_final_line_in_compact_viewport() {
-        let root = std::env::temp_dir().join(format!("notestrike-native-scroll-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("notestrike-native-scroll-{}", Uuid::new_v4()));
         let mut notebook = Notebook::create(&root).unwrap();
         let mut body = String::from("# Project Hub\n\n");
         for line in 1..=60 {
@@ -737,9 +739,15 @@ mod tests {
         }
         let (content_height, viewport_height, scroll_offset) = measurement.unwrap();
         assert!(content_height > viewport_height + 100.0);
-        assert!(scroll_offset > 100.0, "source editor did not scroll to the final line");
-        assert!(editor.body_draft.ends_with("FINAL ACCESSIBLE LINE: save and close the review.\n"));
+        assert!(
+            scroll_offset > 100.0,
+            "source editor did not scroll to the final line"
+        );
+        assert!(
+            editor
+                .body_draft
+                .ends_with("FINAL ACCESSIBLE LINE: save and close the review.\n")
+        );
         fs::remove_dir_all(root).unwrap();
     }
-
 }
