@@ -734,10 +734,7 @@ mod tests {
             };
             let mut output = context.run_ui(input, |ui| {
                 let output = editor.source_editor(ui, note.id, true);
-                measurement = Some((
-                    output.content_size.y,
-                    output.inner_rect.height(),
-                ));
+                measurement = Some((output.content_size.y, output.inner_rect.height()));
             });
             output.textures_delta.clear();
         }
