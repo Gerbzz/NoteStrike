@@ -273,7 +273,8 @@ impl NativeEditor {
     }
 
     fn backlink_notes(&self, id: Uuid) -> Vec<(Uuid, String)> {
-        self.notebook
+        let mut links: Vec<_> = self
+            .notebook
             .backlinks(id)
             .into_iter()
             .filter_map(|source| {
@@ -281,7 +282,9 @@ impl NativeEditor {
                     .get(source)
                     .map(|note| (source, note.title.clone()))
             })
-            .collect()
+            .collect();
+        links.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+        links
     }
 
     fn note_list(&mut self, ui: &mut egui::Ui) {
@@ -525,7 +528,8 @@ impl eframe::App for NativeEditor {
         }
         egui::CentralPanel::default().show(ui, |ui| {
             if compact {
-                egui::CollapsingHeader::new("Details and backlinks")
+                let backlink_count = self.selected.map(|id| self.notebook.backlinks(id).len()).unwrap_or(0);
+                egui::CollapsingHeader::new(format!("Details and backlinks ({backlink_count})"))
                     .default_open(true)
                     .show(ui, |ui| {
                         egui::ScrollArea::vertical()
