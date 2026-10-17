@@ -427,7 +427,7 @@ impl NativeEditor {
         });
         if self.status.contains("changed on disk") && self.dirty {
             ui.colored_label(
-                egui::Color32::YELLOW,
+                egui::Color32::from_rgb(139, 77, 22),
                 "The disk copy changed while this note was open.",
             );
             if ui.button("Save editor text as a separate note").clicked() {
@@ -447,7 +447,7 @@ impl NativeEditor {
             let size = ui.available_size();
             let editor = egui::TextEdit::multiline(&mut self.body_draft)
                 .desired_width(f32::INFINITY)
-                .font(egui::TextStyle::Monospace);
+                .code_editor();
             if ui.add_sized(size, editor).changed() {
                 self.dirty = self
                     .notebook
@@ -526,7 +526,12 @@ impl eframe::App for NativeEditor {
         egui::CentralPanel::default().show(ui, |ui| {
             if compact {
                 egui::CollapsingHeader::new("Details and backlinks")
-                    .show(ui, |ui| self.context_rail(ui));
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(160.0)
+                            .show(ui, |ui| self.context_rail(ui));
+                    });
                 ui.separator();
             }
             self.editor(ui);
