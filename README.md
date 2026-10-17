@@ -25,7 +25,7 @@ NoteStrike keeps a Markdown notebook on your own machine. Create and edit notes,
 
 ![NoteStrike native editor showing a synthetic Field Log notebook](assets/screenshots/note-editor.png)
 
-This is an app-rendered capture of the current native editor with two self-authored sample notes. The [screenshot provenance](docs/SCREENSHOT_PROVENANCE.md) records its scope and hashes.
+This genuine app-rendered capture documents the editor before the current workspace refinement. A capture from the updated branch is still pending. The [screenshot provenance](docs/SCREENSHOT_PROVENANCE.md) records its source and hashes.
 
 ## Current status
 
