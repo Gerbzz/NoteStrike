@@ -31,6 +31,7 @@ struct CaptureOnce {
     started: Instant,
     settle_frames: u8,
     requested: bool,
+    scroll_to_end: bool,
 }
 
 impl NativeEditor {
@@ -63,6 +64,19 @@ impl NativeEditor {
 
     /// Capture one fully painted editor frame, then close the capture window.
     pub fn capture_once(&mut self, path: PathBuf) -> Arc<Mutex<Option<Result<(), String>>>> {
+        self.capture_with_scroll(path, false)
+    }
+
+    /// Capture a fully painted frame with the source editor scrolled to its end.
+    pub fn capture_once_at_end(&mut self, path: PathBuf) -> Arc<Mutex<Option<Result<(), String>>>> {
+        self.capture_with_scroll(path, true)
+    }
+
+    fn capture_with_scroll(
+        &mut self,
+        path: PathBuf,
+        scroll_to_end: bool,
+    ) -> Arc<Mutex<Option<Result<(), String>>>> {
         let outcome = Arc::new(Mutex::new(None));
         self.capture = Some(CaptureOnce {
             path,
@@ -70,6 +84,7 @@ impl NativeEditor {
             started: Instant::now(),
             settle_frames: 0,
             requested: false,
+            scroll_to_end,
         });
         outcome
     }
@@ -378,6 +393,33 @@ impl NativeEditor {
         ui.weak(format!("ID: {id}"));
     }
 
+    fn source_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: Uuid,
+        scroll_to_end: bool,
+    ) -> egui::scroll_area::ScrollAreaOutput<()> {
+        let visible_rows = ((ui.available_height().max(80.0) / 18.0).ceil() as usize).max(4);
+        let mut area = egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .id_salt("notestrike-source");
+        if scroll_to_end {
+            area = area.vertical_scroll_offset(f32::MAX);
+        }
+        area.show(ui, |ui| {
+            let editor = egui::TextEdit::multiline(&mut self.body_draft)
+                .desired_width(f32::INFINITY)
+                .desired_rows(visible_rows)
+                .code_editor();
+            if ui.add(editor).changed() {
+                self.dirty = self
+                    .notebook
+                    .get(id)
+                    .is_some_and(|note| self.body_draft != note.body);
+            }
+        })
+    }
+
     fn editor(&mut self, ui: &mut egui::Ui) {
         let Some(id) = self.selected else {
             ui.vertical_centered(|ui| {
@@ -451,16 +493,8 @@ impl NativeEditor {
                 }
             });
         } else {
-            let size = ui.available_size();
-            let editor = egui::TextEdit::multiline(&mut self.body_draft)
-                .desired_width(f32::INFINITY)
-                .code_editor();
-            if ui.add_sized(size, editor).changed() {
-                self.dirty = self
-                    .notebook
-                    .get(id)
-                    .is_some_and(|note| self.body_draft != note.body);
-            }
+            let scroll_to_end = self.capture.as_ref().is_some_and(|capture| capture.scroll_to_end);
+            self.source_editor(ui, id, scroll_to_end);
         }
     }
 }
