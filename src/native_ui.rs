@@ -286,14 +286,21 @@ impl NativeEditor {
 
     fn note_list(&mut self, ui: &mut egui::Ui) {
         ui.heading("Notes");
-        ui.label(egui::RichText::new(format!("{} in this notebook", self.notebook.list().len())).small().weak());
+        ui.label(
+            egui::RichText::new(format!("{} in this notebook", self.notebook.list().len()))
+                .small()
+                .weak(),
+        );
         ui.add_space(10.0);
         ui.add_sized(
             [ui.available_width(), 36.0],
             egui::TextEdit::singleline(&mut self.search).hint_text("Search notes"),
         );
         ui.add_space(4.0);
-        if ui.add_sized([ui.available_width(), 36.0], egui::Button::new("New note")).clicked() {
+        if ui
+            .add_sized([ui.available_width(), 36.0], egui::Button::new("New note"))
+            .clicked()
+        {
             self.create_note();
         }
         ui.add_space(12.0);
@@ -339,7 +346,10 @@ impl NativeEditor {
             return;
         };
         ui.label("Title");
-        ui.add_sized([ui.available_width(), 34.0], egui::TextEdit::singleline(&mut self.rename_draft));
+        ui.add_sized(
+            [ui.available_width(), 34.0],
+            egui::TextEdit::singleline(&mut self.rename_draft),
+        );
         if ui.button("Save title").clicked() {
             self.rename();
         }
@@ -377,7 +387,11 @@ impl NativeEditor {
             .map(|note| note.title.clone())
             .unwrap_or_default();
         ui.heading(title);
-        ui.label(if self.dirty { "Unsaved changes" } else { "Saved in this notebook" });
+        ui.label(if self.dirty {
+            "Unsaved changes"
+        } else {
+            "Saved in this notebook"
+        });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui
@@ -459,10 +473,18 @@ impl eframe::App for NativeEditor {
             style.visuals.widgets.inactive.bg_fill = egui::Color32::WHITE;
             style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(226, 240, 235);
             style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(191, 226, 216);
-            style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
-            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
-            style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(23.0));
-            style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(15.0));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Heading, egui::FontId::proportional(23.0));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Monospace, egui::FontId::monospace(15.0));
             style.spacing.item_spacing = egui::vec2(8.0, 8.0);
             style.spacing.button_padding = egui::vec2(10.0, 6.0);
             ctx.set_style(style);
@@ -475,8 +497,13 @@ impl eframe::App for NativeEditor {
                 ui.horizontal(|ui| {
                     ui.heading("NoteStrike");
                     ui.separator();
-                    let notebook_name = self.root.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
-                    ui.label(notebook_name.to_string()).on_hover_text(self.root.display().to_string());
+                    let notebook_name = self
+                        .root
+                        .file_name()
+                        .map(|name| name.to_string_lossy())
+                        .unwrap_or_default();
+                    ui.label(notebook_name.to_string())
+                        .on_hover_text(self.root.display().to_string());
                 });
             });
         egui::Panel::bottom("notestrike_status")
