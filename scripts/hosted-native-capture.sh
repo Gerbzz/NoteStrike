@@ -6,7 +6,12 @@ mkdir -p "$probe_root"
 cli="./target/debug/notestrike"
 native="./target/debug/notestrike-native"
 "$cli" init "$notebook"
-hub_body=
+hub_body=$'# Project Hub\n\nPlan the next release with a clean, local notebook.\n\n- Review priorities\n- Capture decisions\n- Follow up on open tasks\n\n## Review log\n'
+for item in $(seq -w 1 60); do
+  hub_body+="Review item $item: capture the next decision."$'\n'
+done
+hub_body+=$'\nFINAL ACCESSIBLE LINE: save and close the review.'
+hub=$("$cli" new "$notebook" "A Project Hub" "$hub_body")
 if [[ ! "$hub" =~ ^[0-9a-f-]{36}$ ]]; then echo 'Fixture hub creation failed.' >&2; exit 1; fi
 for index in $(seq -w 1 12); do
   "$cli" new "$notebook" "B Review $index" "# B Review $index"$'\n\n'"See [[$hub|Project Hub]] for the running plan."$'\n\nA short note for the next review.' >/dev/null
@@ -21,7 +26,9 @@ for spec in WIDE:1280:800 COMPACT:800:520; do
   capture="${probe_root}/${label,,}.png"
   stdout="${probe_root}/${label,,}.out.txt"
   stderr="${probe_root}/${label,,}.err.txt"
-  capture_flag="--capture"\n  if [[ "$label" == "COMPACT" ]]; then capture_flag="--capture-scroll-end"; fi\n  if ! timeout 50s xvfb-run -a -s '-screen 0 1600x1000x24' "$native" "$notebook" "$capture_flag" "$capture" "$width" "$height" >"$stdout" 2>"$stderr"; then
+  capture_flag="--capture"
+  if [[ "$label" == "COMPACT" ]]; then capture_flag="--capture-scroll-end"; fi
+  if ! timeout 50s xvfb-run -a -s '-screen 0 1600x1000x24' "$native" "$notebook" "$capture_flag" "$capture" "$width" "$height" >"$stdout" 2>"$stderr"; then
     echo "$label stdout:"; cat "$stdout"
     echo "$label stderr:"; cat "$stderr"
     echo "Hosted $label native capture failed." >&2
