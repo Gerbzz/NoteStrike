@@ -12,15 +12,18 @@ fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
     let Some(root) = args.next().map(PathBuf::from) else {
         eprintln!(
-            "Usage: notestrike-native NOTEBOOK_DIR [--capture FILE.png [WIDTH HEIGHT]] (run `notestrike init` first)"
+            "Usage: notestrike-native NOTEBOOK_DIR [--capture|--capture-scroll-end FILE.png [WIDTH HEIGHT]] (run `notestrike init` first)"
         );
         return ExitCode::FAILURE;
     };
     let capture_args: Vec<_> = args.collect();
+    let scroll_to_end = capture_args
+        .first()
+        .is_some_and(|flag| flag == "--capture-scroll-end");
     let (capture_path, window_size) = match capture_args.as_slice() {
         [] => (None, [1280.0, 800.0]),
-        [flag, output] if flag == "--capture" => (Some(PathBuf::from(output)), [1280.0, 800.0]),
-        [flag, output, width, height] if flag == "--capture" => {
+        [flag, output] if (flag == "--capture" || flag == "--capture-scroll-end") => (Some(PathBuf::from(output)), [1280.0, 800.0]),
+        [flag, output, width, height] if (flag == "--capture" || flag == "--capture-scroll-end") => {
             let dimensions = (
                 width.to_string_lossy().parse::<u32>(),
                 height.to_string_lossy().parse::<u32>(),
@@ -38,7 +41,7 @@ fn main() -> ExitCode {
             }
         }
         _ => {
-            eprintln!("Usage: notestrike-native NOTEBOOK_DIR [--capture FILE.png [WIDTH HEIGHT]]");
+            eprintln!("Usage: notestrike-native NOTEBOOK_DIR [--capture|--capture-scroll-end FILE.png [WIDTH HEIGHT]]");
             return ExitCode::FAILURE;
         }
     };
@@ -57,7 +60,13 @@ fn main() -> ExitCode {
         }
     };
     let mut editor = NativeEditor::new(root, notebook);
-    let capture_result = capture_path.map(|path| editor.capture_once(path));
+    let capture_result = capture_path.map(|path| {
+        if scroll_to_end {
+            editor.capture_once_at_end(path)
+        } else {
+            editor.capture_once(path)
+        }
+    });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("NoteStrike")
