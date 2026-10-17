@@ -19,13 +19,16 @@ fn main() -> ExitCode {
     let capture_args: Vec<_> = args.collect();
     let (capture_path, window_size) = match capture_args.as_slice() {
         [] => (None, [1280.0, 800.0]),
-        [flag, output] if flag == "--capture" => {
-            (Some(PathBuf::from(output)), [1280.0, 800.0])
-        }
+        [flag, output] if flag == "--capture" => (Some(PathBuf::from(output)), [1280.0, 800.0]),
         [flag, output, width, height] if flag == "--capture" => {
-            let dimensions = (width.to_string_lossy().parse::<u32>(), height.to_string_lossy().parse::<u32>());
+            let dimensions = (
+                width.to_string_lossy().parse::<u32>(),
+                height.to_string_lossy().parse::<u32>(),
+            );
             match dimensions {
-                (Ok(width), Ok(height)) if (800..=2000).contains(&width) && (520..=1400).contains(&height) => {
+                (Ok(width), Ok(height))
+                    if (800..=2000).contains(&width) && (520..=1400).contains(&height) =>
+                {
                     (Some(PathBuf::from(output)), [width as f32, height as f32])
                 }
                 _ => {
@@ -39,7 +42,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if capture_path.as_ref().is_some_and(|output| output.extension().is_none_or(|ext| ext != "png")) {
+    if capture_path
+        .as_ref()
+        .is_some_and(|output| output.extension().is_none_or(|ext| ext != "png"))
+    {
         eprintln!("Capture path must end in .png");
         return ExitCode::FAILURE;
     }
