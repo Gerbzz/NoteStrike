@@ -493,7 +493,10 @@ impl NativeEditor {
                 }
             });
         } else {
-            let scroll_to_end = self.capture.as_ref().is_some_and(|capture| capture.scroll_to_end);
+            let scroll_to_end = self
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.scroll_to_end);
             self.source_editor(ui, id, scroll_to_end);
         }
     }
@@ -711,7 +714,9 @@ mod tests {
         let mut notebook = Notebook::create(&root).unwrap();
         let mut body = String::from("# Project Hub\n\n");
         for line in 1..=60 {
-            body.push_str(&format!("- Review item {line:02}: capture the next decision.\n"));
+            body.push_str(&format!(
+                "- Review item {line:02}: capture the next decision.\n"
+            ));
         }
         body.push_str("FINAL ACCESSIBLE LINE: save and close the review.\n");
         let note = notebook.add("A Project Hub", &body).unwrap();
