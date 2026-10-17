@@ -23,13 +23,15 @@ NoteStrike keeps a Markdown notebook on your own machine. Create and edit notes,
 
 ## Native editor preview
 
-![NoteStrike native editor showing a synthetic Field Log notebook](assets/screenshots/note-editor.png)
+![Current NoteStrike workspace with a selected Project Hub and sorted backlinks](assets/screenshots/current-editor-wide.png)
 
-This genuine app-rendered capture documents the editor before the current workspace refinement. A capture from the updated branch is still pending. The [screenshot provenance](docs/SCREENSHOT_PROVENANCE.md) records its source and hashes.
+![Current compact NoteStrike workspace with bounded Details and the editor visible](assets/screenshots/current-editor-compact.png)
+
+These genuine app-window captures show the current branch with a synthetic local notebook and 12 backlinks. [Current capture provenance](docs/current-editor-visual.md) records the exact source, hosted run, fixture, and hashes. The [earlier Field Log capture](assets/screenshots/note-editor.png) and its [provenance](docs/SCREENSHOT_PROVENANCE.md) document the previous workspace.
 
 ## Current status
 
-Windows alpha source. The notebook core and optional native editor passed bounded local checks, including a conflict-recovery case. Native pointer and accessibility behavior, attachments, backup and restore, and installer packaging remain open.
+Native editor alpha source. The notebook core and optional native editor passed hosted Windows tests and a native Linux software-rendering capture, including a conflict-recovery case. Native pointer and accessibility behavior, attachments, backup and restore, and installer packaging remain open.
 
 ## Keep links through a rename
 
