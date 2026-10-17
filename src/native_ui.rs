@@ -732,15 +732,13 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let _ = context.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let output = editor.source_editor(ui, note.id, true);
-                    measurement = Some((
-                        output.content_size.y,
-                        output.inner_rect.height(),
-                        output.state.offset.y,
-                    ));
-                });
+            let _ = context.run_ui(input, |ui| {
+                let output = editor.source_editor(ui, note.id, true);
+                measurement = Some((
+                    output.content_size.y,
+                    output.inner_rect.height(),
+                    output.state.offset.y,
+                ));
             });
         }
         let (content_height, viewport_height, scroll_offset) = measurement.unwrap();
