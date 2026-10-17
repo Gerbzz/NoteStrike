@@ -19,4 +19,15 @@ jobs:
       - name: Tests
         run: cargo test --locked --features native-ui -j 2
       - name: Native editor build
-        run: cargo build --locked --features native-ui --bin notestrike-native -j 2
+        run: cargo build --locked --features native-ui --bin notestrike-native --bin notestrike -j 2
+      - name: Capture hosted native editor
+        shell: pwsh
+        run: ./scripts/hosted-native-capture.ps1
+      - name: Upload editor PNGs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notestrike-editor-visual
+          path: ${{ runner.temp }}/notestrike-editor-visual/*.png
+          if-no-files-found: ignore
+          retention-days: 1
