@@ -329,7 +329,7 @@ impl NativeEditor {
     fn context_rail(&mut self, ui: &mut egui::Ui) {
         ui.heading("Details");
         if !self.notebook.warnings().is_empty() {
-            ui.colored_label(egui::Color32::YELLOW, "Unreadable note files");
+            ui.colored_label(egui::Color32::from_rgb(139, 77, 22), "Unreadable note files");
             for warning in self.notebook.warnings().iter().take(5) {
                 let name = warning
                     .path
@@ -390,7 +390,7 @@ impl NativeEditor {
         ui.label(if self.dirty {
             "Unsaved changes"
         } else {
-            "Saved in this notebook"
+            "No unsaved edits"
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -464,7 +464,8 @@ impl eframe::App for NativeEditor {
             self.save();
         }
         if !self.styled {
-            let mut style = (*ctx.style()).clone();
+            ctx.set_theme(egui::Theme::Light);
+            let mut style = (*ctx.style_of(egui::Theme::Light)).clone();
             style.visuals = egui::Visuals::light();
             style.visuals.panel_fill = egui::Color32::from_rgb(246, 247, 245);
             style.visuals.extreme_bg_color = egui::Color32::WHITE;
@@ -487,7 +488,7 @@ impl eframe::App for NativeEditor {
                 .insert(egui::TextStyle::Monospace, egui::FontId::monospace(15.0));
             style.spacing.item_spacing = egui::vec2(8.0, 8.0);
             style.spacing.button_padding = egui::vec2(10.0, 6.0);
-            ctx.set_style(style);
+            ctx.set_style_of(egui::Theme::Light, style);
             self.styled = true;
         }
         let compact = ui.available_width() < 1050.0;
