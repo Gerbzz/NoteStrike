@@ -25,9 +25,9 @@ NoteStrike keeps a Markdown notebook on your own machine. Create and edit notes,
 
 ![Current NoteStrike workspace with a selected Project Hub and sorted backlinks](assets/screenshots/current-editor-wide.png)
 
-![Current compact NoteStrike workspace with bounded Details and the editor visible](assets/screenshots/current-editor-compact.png)
+![Current compact NoteStrike workspace with Details open and the final line of a long note visible](assets/screenshots/current-editor-compact.png)
 
-These genuine app-window captures show the current branch with a synthetic local notebook and 12 backlinks. [Current capture provenance](docs/current-editor-visual.md) records the exact source, hosted run, fixture, and hashes. The [earlier Field Log capture](assets/screenshots/note-editor.png) and its [provenance](docs/SCREENSHOT_PROVENANCE.md) document the previous workspace.
+These genuine app-window captures show the current branch with a synthetic 60-line local note and 12 backlinks; the compact view shows its final line. [Current capture provenance](docs/current-editor-visual.md) records the exact source, hosted run, fixture, and hashes. The [earlier Field Log capture](assets/screenshots/note-editor.png) and its [provenance](docs/SCREENSHOT_PROVENANCE.md) document the previous workspace.
 
 ## Current status
 
