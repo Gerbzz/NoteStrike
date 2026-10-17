@@ -1,0 +1,22 @@
+name: Native editor checks
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Tests
+        run: cargo test --locked --features native-ui -j 2
+      - name: Native editor build
+        run: cargo build --locked --features native-ui --bin notestrike-native -j 2
