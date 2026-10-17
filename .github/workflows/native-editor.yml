@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Software OpenGL display
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libxkbcommon-dev libxkbcommon-x11-0
       - name: Build editor and fixture CLI
         run: cargo build --locked --features native-ui --bin notestrike-native --bin notestrike -j 2
       - name: Capture populated editor
