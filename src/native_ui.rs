@@ -401,6 +401,7 @@ impl NativeEditor {
     ) -> egui::containers::scroll_area::ScrollAreaOutput<()> {
         let visible_rows = ((ui.available_height().max(80.0) / 18.0).ceil() as usize).max(4);
         let area = egui::ScrollArea::vertical()
+            .animated(!scroll_to_end)
             .auto_shrink([false, false])
             .id_salt(("notestrike-source", id));
         area.show(ui, |ui| {
