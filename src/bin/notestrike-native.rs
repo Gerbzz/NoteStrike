@@ -12,25 +12,50 @@ fn main() -> ExitCode {
     let mut args = std::env::args_os().skip(1);
     let Some(root) = args.next().map(PathBuf::from) else {
         eprintln!(
-            "Usage: notestrike-native NOTEBOOK_DIR [--capture FILE.png] (run `notestrike init` first)"
+            "Usage: notestrike-native NOTEBOOK_DIR [--capture|--capture-scroll-end FILE.png [WIDTH HEIGHT]] (run `notestrike init` first)"
         );
         return ExitCode::FAILURE;
     };
-    let capture_path = match (args.next(), args.next(), args.next()) {
-        (None, None, None) => None,
-        (Some(flag), Some(output), None) if flag == "--capture" => {
-            let output = PathBuf::from(output);
-            if output.extension().is_none_or(|ext| ext != "png") {
-                eprintln!("Capture path must end in .png");
-                return ExitCode::FAILURE;
+    let capture_args: Vec<_> = args.collect();
+    let scroll_to_end = capture_args
+        .first()
+        .is_some_and(|flag| flag == "--capture-scroll-end");
+    let (capture_path, window_size) = match capture_args.as_slice() {
+        [] => (None, [1280.0, 800.0]),
+        [flag, output] if flag == "--capture" || flag == "--capture-scroll-end" => {
+            (Some(PathBuf::from(output)), [1280.0, 800.0])
+        }
+        [flag, output, width, height] if flag == "--capture" || flag == "--capture-scroll-end" => {
+            let dimensions = (
+                width.to_string_lossy().parse::<u32>(),
+                height.to_string_lossy().parse::<u32>(),
+            );
+            match dimensions {
+                (Ok(width), Ok(height))
+                    if (800..=2000).contains(&width) && (520..=1400).contains(&height) =>
+                {
+                    (Some(PathBuf::from(output)), [width as f32, height as f32])
+                }
+                _ => {
+                    eprintln!("Capture window size must be WIDTH 800-2000 and HEIGHT 520-1400");
+                    return ExitCode::FAILURE;
+                }
             }
-            Some(output)
         }
         _ => {
-            eprintln!("Usage: notestrike-native NOTEBOOK_DIR [--capture FILE.png]");
+            eprintln!(
+                "Usage: notestrike-native NOTEBOOK_DIR [--capture|--capture-scroll-end FILE.png [WIDTH HEIGHT]]"
+            );
             return ExitCode::FAILURE;
         }
     };
+    if capture_path
+        .as_ref()
+        .is_some_and(|output| output.extension().is_none_or(|ext| ext != "png"))
+    {
+        eprintln!("Capture path must end in .png");
+        return ExitCode::FAILURE;
+    }
     let notebook = match Notebook::open(&root) {
         Ok(notebook) => notebook,
         Err(error) => {
@@ -39,11 +64,17 @@ fn main() -> ExitCode {
         }
     };
     let mut editor = NativeEditor::new(root, notebook);
-    let capture_result = capture_path.map(|path| editor.capture_once(path));
+    let capture_result = capture_path.map(|path| {
+        if scroll_to_end {
+            editor.capture_once_at_end(path)
+        } else {
+            editor.capture_once(path)
+        }
+    });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("NoteStrike")
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size(window_size)
             .with_min_inner_size([800.0, 520.0]),
         renderer: eframe::Renderer::Glow,
         ..Default::default()

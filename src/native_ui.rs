@@ -20,6 +20,7 @@ pub struct NativeEditor {
     rename_draft: String,
     dirty: bool,
     preview: bool,
+    styled: bool,
     status: String,
     capture: Option<CaptureOnce>,
 }
@@ -30,6 +31,7 @@ struct CaptureOnce {
     started: Instant,
     settle_frames: u8,
     requested: bool,
+    scroll_to_end: bool,
 }
 
 impl NativeEditor {
@@ -50,6 +52,7 @@ impl NativeEditor {
             rename_draft,
             dirty: false,
             preview: false,
+            styled: false,
             status: if warning_count == 0 {
                 "Ready".into()
             } else {
@@ -61,6 +64,19 @@ impl NativeEditor {
 
     /// Capture one fully painted editor frame, then close the capture window.
     pub fn capture_once(&mut self, path: PathBuf) -> Arc<Mutex<Option<Result<(), String>>>> {
+        self.capture_with_scroll(path, false)
+    }
+
+    /// Capture a fully painted frame with the source editor scrolled to its end.
+    pub fn capture_once_at_end(&mut self, path: PathBuf) -> Arc<Mutex<Option<Result<(), String>>>> {
+        self.capture_with_scroll(path, true)
+    }
+
+    fn capture_with_scroll(
+        &mut self,
+        path: PathBuf,
+        scroll_to_end: bool,
+    ) -> Arc<Mutex<Option<Result<(), String>>>> {
         let outcome = Arc::new(Mutex::new(None));
         self.capture = Some(CaptureOnce {
             path,
@@ -68,6 +84,7 @@ impl NativeEditor {
             started: Instant::now(),
             settle_frames: 0,
             requested: false,
+            scroll_to_end,
         });
         outcome
     }
@@ -271,7 +288,8 @@ impl NativeEditor {
     }
 
     fn backlink_notes(&self, id: Uuid) -> Vec<(Uuid, String)> {
-        self.notebook
+        let mut links: Vec<_> = self
+            .notebook
             .backlinks(id)
             .into_iter()
             .filter_map(|source| {
@@ -279,20 +297,45 @@ impl NativeEditor {
                     .get(source)
                     .map(|note| (source, note.title.clone()))
             })
-            .collect()
+            .collect();
+        links.sort_by(|a, b| {
+            a.1.to_lowercase()
+                .cmp(&b.1.to_lowercase())
+                .then(a.0.cmp(&b.0))
+        });
+        links
     }
 
     fn note_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Notebook");
-        ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Search titles and text"));
-        if ui.button("New note").clicked() {
+        ui.heading("Notes");
+        ui.label(
+            egui::RichText::new(format!("{} in this notebook", self.notebook.list().len()))
+                .small()
+                .weak(),
+        );
+        ui.add_space(10.0);
+        ui.add_sized(
+            [ui.available_width(), 36.0],
+            egui::TextEdit::singleline(&mut self.search).hint_text("Search notes"),
+        );
+        ui.add_space(4.0);
+        if ui
+            .add_sized([ui.available_width(), 36.0], egui::Button::new("New note"))
+            .clicked()
+        {
             self.create_note();
         }
+        ui.add_space(12.0);
         ui.separator();
         let notes = self.matching_notes();
         egui::ScrollArea::vertical().show(ui, |ui| {
             if notes.is_empty() {
-                ui.label("No matching notes.");
+                ui.add_space(12.0);
+                ui.label(if self.search.trim().is_empty() {
+                    "No notes yet. Create one to start your local notebook."
+                } else {
+                    "No matches. Try a shorter search or clear the field."
+                });
             }
             for (id, title) in notes {
                 if ui
@@ -306,9 +349,12 @@ impl NativeEditor {
     }
 
     fn context_rail(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Context");
+        ui.heading("Details");
         if !self.notebook.warnings().is_empty() {
-            ui.colored_label(egui::Color32::YELLOW, "Unreadable note files");
+            ui.colored_label(
+                egui::Color32::from_rgb(139, 77, 22),
+                "Unreadable note files",
+            );
             for warning in self.notebook.warnings().iter().take(5) {
                 let name = warning
                     .path
@@ -324,8 +370,11 @@ impl NativeEditor {
             ui.label("Select a note to see its links.");
             return;
         };
-        ui.label("Rename note");
-        ui.text_edit_singleline(&mut self.rename_draft);
+        ui.label("Title");
+        ui.add_sized(
+            [ui.available_width(), 34.0],
+            egui::TextEdit::singleline(&mut self.rename_draft),
+        );
         if ui.button("Save title").clicked() {
             self.rename();
         }
@@ -344,10 +393,45 @@ impl NativeEditor {
         ui.weak(format!("ID: {id}"));
     }
 
+    fn source_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: Uuid,
+        scroll_to_end: bool,
+    ) -> egui::containers::scroll_area::ScrollAreaOutput<()> {
+        let visible_rows = ((ui.available_height().max(80.0) / 18.0).ceil() as usize).max(4);
+        let area = egui::ScrollArea::vertical()
+            .animated(!scroll_to_end)
+            .auto_shrink([false, false])
+            .id_salt(("notestrike-source", id));
+        area.show(ui, |ui| {
+            let editor = egui::TextEdit::multiline(&mut self.body_draft)
+                .desired_width(f32::INFINITY)
+                .desired_rows(visible_rows)
+                .code_editor();
+            let response = ui.add(editor);
+            if scroll_to_end {
+                ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+            }
+            if response.changed() {
+                self.dirty = self
+                    .notebook
+                    .get(id)
+                    .is_some_and(|note| self.body_draft != note.body);
+            }
+        })
+    }
+
     fn editor(&mut self, ui: &mut egui::Ui) {
         let Some(id) = self.selected else {
-            ui.centered_and_justified(|ui| {
-                ui.heading("Create a note to begin.");
+            ui.vertical_centered(|ui| {
+                ui.add_space(56.0);
+                ui.heading("Start with a note");
+                ui.label("Your notes are saved as local Markdown files in this notebook.");
+                ui.add_space(14.0);
+                if ui.button("Create a note").clicked() {
+                    self.create_note();
+                }
             });
             return;
         };
@@ -356,12 +440,13 @@ impl NativeEditor {
             .get(id)
             .map(|note| note.title.clone())
             .unwrap_or_default();
-        ui.horizontal(|ui| {
-            ui.heading(title);
-            if self.dirty {
-                ui.strong("Unsaved");
-            }
+        ui.heading(title);
+        ui.label(if self.dirty {
+            "Unsaved changes"
+        } else {
+            "No unsaved edits"
         });
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(self.dirty, egui::Button::new("Save · Ctrl+S"))
@@ -393,7 +478,7 @@ impl NativeEditor {
         });
         if self.status.contains("changed on disk") && self.dirty {
             ui.colored_label(
-                egui::Color32::YELLOW,
+                egui::Color32::from_rgb(139, 77, 22),
                 "The disk copy changed while this note was open.",
             );
             if ui.button("Save editor text as a separate note").clicked() {
@@ -402,18 +487,19 @@ impl NativeEditor {
         }
         ui.separator();
         if self.preview {
-            egui::ScrollArea::vertical().show(ui, |ui| markdown_preview(ui, &self.body_draft));
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if self.body_draft.trim().is_empty() {
+                    ui.label("Nothing to preview. Switch to Edit source to write this note.");
+                } else {
+                    markdown_preview(ui, &self.body_draft);
+                }
+            });
         } else {
-            let size = ui.available_size();
-            let editor = egui::TextEdit::multiline(&mut self.body_draft)
-                .desired_width(f32::INFINITY)
-                .code_editor();
-            if ui.add_sized(size, editor).changed() {
-                self.dirty = self
-                    .notebook
-                    .get(id)
-                    .is_some_and(|note| self.body_draft != note.body);
-            }
+            let scroll_to_end = self
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.scroll_to_end);
+            self.source_editor(ui, id, scroll_to_end);
         }
     }
 }
@@ -426,25 +512,80 @@ impl eframe::App for NativeEditor {
         {
             self.save();
         }
+        if !self.styled {
+            ctx.set_theme(egui::Theme::Light);
+            let mut style = (*ctx.style_of(egui::Theme::Light)).clone();
+            style.visuals = egui::Visuals::light();
+            style.visuals.panel_fill = egui::Color32::from_rgb(246, 247, 245);
+            style.visuals.extreme_bg_color = egui::Color32::WHITE;
+            style.visuals.override_text_color = Some(egui::Color32::from_rgb(30, 43, 42));
+            style.visuals.selection.bg_fill = egui::Color32::from_rgb(177, 222, 209);
+            style.visuals.widgets.inactive.bg_fill = egui::Color32::WHITE;
+            style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(226, 240, 235);
+            style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(191, 226, 216);
+            style
+                .text_styles
+                .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Heading, egui::FontId::proportional(23.0));
+            style
+                .text_styles
+                .insert(egui::TextStyle::Monospace, egui::FontId::monospace(15.0));
+            style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+            style.spacing.button_padding = egui::vec2(10.0, 6.0);
+            ctx.set_style_of(egui::Theme::Light, style);
+            self.styled = true;
+        }
+        let compact = ui.available_width() < 1050.0;
         egui::Panel::top("notestrike_toolbar")
-            .exact_size(44.0)
+            .exact_size(54.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.strong("NoteStrike");
-                    ui.label(egui::RichText::new("by PWDS").small().weak());
+                    ui.heading("NoteStrike");
                     ui.separator();
-                    ui.label(self.root.display().to_string());
-                    ui.separator();
-                    ui.label(&self.status);
+                    let notebook_name = self
+                        .root
+                        .file_name()
+                        .map(|name| name.to_string_lossy())
+                        .unwrap_or_default();
+                    ui.label(notebook_name.to_string())
+                        .on_hover_text(self.root.display().to_string());
                 });
             });
+        egui::Panel::bottom("notestrike_status")
+            .exact_size(30.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(&self.status).small());
+            });
         egui::Panel::left("notestrike_notes")
-            .exact_size(270.0)
+            .exact_size(if compact { 230.0 } else { 270.0 })
             .show(ui, |ui| self.note_list(ui));
-        egui::Panel::right("notestrike_context")
-            .exact_size(240.0)
-            .show(ui, |ui| self.context_rail(ui));
-        egui::CentralPanel::default().show(ui, |ui| self.editor(ui));
+        if !compact {
+            egui::Panel::right("notestrike_context")
+                .exact_size(240.0)
+                .show(ui, |ui| self.context_rail(ui));
+        }
+        egui::CentralPanel::default().show(ui, |ui| {
+            if compact {
+                let backlink_count = self
+                    .selected
+                    .map(|id| self.notebook.backlinks(id).len())
+                    .unwrap_or(0);
+                egui::CollapsingHeader::new(format!("Details and backlinks ({backlink_count})"))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(160.0)
+                            .show(ui, |ui| self.context_rail(ui));
+                    });
+                ui.separator();
+            }
+            self.editor(ui);
+        });
         self.capture_after_frame(&ctx);
     }
 }
@@ -564,6 +705,47 @@ mod tests {
         assert_eq!(
             final_book.get(editor.selected.unwrap()).unwrap().body,
             "Local unsaved field text."
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn long_source_has_scrollable_compact_viewport() {
+        let root =
+            std::env::temp_dir().join(format!("notestrike-native-scroll-{}", Uuid::new_v4()));
+        let mut notebook = Notebook::create(&root).unwrap();
+        let mut body = String::from("# Project Hub\n\n");
+        for line in 1..=60 {
+            body.push_str(&format!(
+                "- Review item {line:02}: capture the next decision.\n"
+            ));
+        }
+        body.push_str("FINAL ACCESSIBLE LINE: save and close the review.\n");
+        let note = notebook.add("A Project Hub", &body).unwrap();
+        let mut editor = NativeEditor::new(root.clone(), notebook);
+        let context = egui::Context::default();
+        let mut measurement = None;
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 520.0),
+                )),
+                ..Default::default()
+            };
+            let mut output = context.run_ui(input, |ui| {
+                let output = editor.source_editor(ui, note.id, true);
+                measurement = Some((output.content_size.y, output.inner_rect.height()));
+            });
+            output.textures_delta.clear();
+        }
+        let (content_height, viewport_height) = measurement.unwrap();
+        assert!(viewport_height <= 520.0);
+        assert!(content_height > viewport_height + 100.0);
+        assert!(
+            editor
+                .body_draft
+                .ends_with("FINAL ACCESSIBLE LINE: save and close the review.\n")
         );
         fs::remove_dir_all(root).unwrap();
     }
