@@ -732,7 +732,7 @@ mod tests {
                 )),
                 ..Default::default()
             };
-            let _ = context.run_ui(input, |ui| {
+            let mut output = context.run_ui(input, |ui| {
                 let output = editor.source_editor(ui, note.id, true);
                 measurement = Some((
                     output.content_size.y,
@@ -740,6 +740,7 @@ mod tests {
                     output.state.offset.y,
                 ));
             });
+            output.textures_delta.clear();
         }
         let (content_height, viewport_height, scroll_offset) = measurement.unwrap();
         assert!(content_height > viewport_height + 100.0);
