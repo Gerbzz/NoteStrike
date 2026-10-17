@@ -402,7 +402,7 @@ impl NativeEditor {
         let visible_rows = ((ui.available_height().max(80.0) / 18.0).ceil() as usize).max(4);
         let mut area = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .id_salt("notestrike-source");
+            .id_salt(("notestrike-source", id));
         if scroll_to_end {
             area = area.vertical_scroll_offset(f32::MAX);
         }
