@@ -22,8 +22,10 @@ fn main() -> ExitCode {
         .is_some_and(|flag| flag == "--capture-scroll-end");
     let (capture_path, window_size) = match capture_args.as_slice() {
         [] => (None, [1280.0, 800.0]),
-        [flag, output] if (flag == "--capture" || flag == "--capture-scroll-end") => (Some(PathBuf::from(output)), [1280.0, 800.0]),
-        [flag, output, width, height] if (flag == "--capture" || flag == "--capture-scroll-end") => {
+        [flag, output] if flag == "--capture" || flag == "--capture-scroll-end" => {
+            (Some(PathBuf::from(output)), [1280.0, 800.0])
+        }
+        [flag, output, width, height] if flag == "--capture" || flag == "--capture-scroll-end" => {
             let dimensions = (
                 width.to_string_lossy().parse::<u32>(),
                 height.to_string_lossy().parse::<u32>(),
@@ -41,7 +43,9 @@ fn main() -> ExitCode {
             }
         }
         _ => {
-            eprintln!("Usage: notestrike-native NOTEBOOK_DIR [--capture|--capture-scroll-end FILE.png [WIDTH HEIGHT]]");
+            eprintln!(
+                "Usage: notestrike-native NOTEBOOK_DIR [--capture|--capture-scroll-end FILE.png [WIDTH HEIGHT]]"
+            );
             return ExitCode::FAILURE;
         }
     };
