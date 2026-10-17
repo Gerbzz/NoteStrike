@@ -20,6 +20,7 @@ pub struct NativeEditor {
     rename_draft: String,
     dirty: bool,
     preview: bool,
+    styled: bool,
     status: String,
     capture: Option<CaptureOnce>,
 }
@@ -50,6 +51,7 @@ impl NativeEditor {
             rename_draft,
             dirty: false,
             preview: false,
+            styled: false,
             status: if warning_count == 0 {
                 "Ready".into()
             } else {
@@ -283,16 +285,28 @@ impl NativeEditor {
     }
 
     fn note_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Notebook");
-        ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Search titles and text"));
-        if ui.button("New note").clicked() {
+        ui.heading("Notes");
+        ui.label(egui::RichText::new(format!("{} in this notebook", self.notebook.list().len())).small().weak());
+        ui.add_space(10.0);
+        ui.add_sized(
+            [ui.available_width(), 36.0],
+            egui::TextEdit::singleline(&mut self.search).hint_text("Search notes"),
+        );
+        ui.add_space(4.0);
+        if ui.add_sized([ui.available_width(), 36.0], egui::Button::new("New note")).clicked() {
             self.create_note();
         }
+        ui.add_space(12.0);
         ui.separator();
         let notes = self.matching_notes();
         egui::ScrollArea::vertical().show(ui, |ui| {
             if notes.is_empty() {
-                ui.label("No matching notes.");
+                ui.add_space(12.0);
+                ui.label(if self.search.trim().is_empty() {
+                    "No notes yet. Create one to start your local notebook."
+                } else {
+                    "No matches. Try a shorter search or clear the field."
+                });
             }
             for (id, title) in notes {
                 if ui
@@ -306,7 +320,7 @@ impl NativeEditor {
     }
 
     fn context_rail(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Context");
+        ui.heading("Details");
         if !self.notebook.warnings().is_empty() {
             ui.colored_label(egui::Color32::YELLOW, "Unreadable note files");
             for warning in self.notebook.warnings().iter().take(5) {
@@ -324,8 +338,8 @@ impl NativeEditor {
             ui.label("Select a note to see its links.");
             return;
         };
-        ui.label("Rename note");
-        ui.text_edit_singleline(&mut self.rename_draft);
+        ui.label("Title");
+        ui.add_sized([ui.available_width(), 34.0], egui::TextEdit::singleline(&mut self.rename_draft));
         if ui.button("Save title").clicked() {
             self.rename();
         }
@@ -346,8 +360,14 @@ impl NativeEditor {
 
     fn editor(&mut self, ui: &mut egui::Ui) {
         let Some(id) = self.selected else {
-            ui.centered_and_justified(|ui| {
-                ui.heading("Create a note to begin.");
+            ui.vertical_centered(|ui| {
+                ui.add_space(56.0);
+                ui.heading("Start with a note");
+                ui.label("Your notes are saved as local Markdown files in this notebook.");
+                ui.add_space(14.0);
+                if ui.button("Create a note").clicked() {
+                    self.create_note();
+                }
             });
             return;
         };
@@ -356,12 +376,9 @@ impl NativeEditor {
             .get(id)
             .map(|note| note.title.clone())
             .unwrap_or_default();
-        ui.horizontal(|ui| {
-            ui.heading(title);
-            if self.dirty {
-                ui.strong("Unsaved");
-            }
-        });
+        ui.heading(title);
+        ui.label(if self.dirty { "Unsaved changes" } else { "Saved in this notebook" });
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(self.dirty, egui::Button::new("Save · Ctrl+S"))
@@ -402,12 +419,18 @@ impl NativeEditor {
         }
         ui.separator();
         if self.preview {
-            egui::ScrollArea::vertical().show(ui, |ui| markdown_preview(ui, &self.body_draft));
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if self.body_draft.trim().is_empty() {
+                    ui.label("Nothing to preview. Switch to Edit source to write this note.");
+                } else {
+                    markdown_preview(ui, &self.body_draft);
+                }
+            });
         } else {
             let size = ui.available_size();
             let editor = egui::TextEdit::multiline(&mut self.body_draft)
                 .desired_width(f32::INFINITY)
-                .code_editor();
+                .font(egui::TextStyle::Monospace);
             if ui.add_sized(size, editor).changed() {
                 self.dirty = self
                     .notebook
@@ -426,25 +449,57 @@ impl eframe::App for NativeEditor {
         {
             self.save();
         }
+        if !self.styled {
+            let mut style = (*ctx.style()).clone();
+            style.visuals = egui::Visuals::light();
+            style.visuals.panel_fill = egui::Color32::from_rgb(246, 247, 245);
+            style.visuals.extreme_bg_color = egui::Color32::WHITE;
+            style.visuals.override_text_color = Some(egui::Color32::from_rgb(30, 43, 42));
+            style.visuals.selection.bg_fill = egui::Color32::from_rgb(177, 222, 209);
+            style.visuals.widgets.inactive.bg_fill = egui::Color32::WHITE;
+            style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(226, 240, 235);
+            style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(191, 226, 216);
+            style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
+            style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::proportional(23.0));
+            style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(15.0));
+            style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+            style.spacing.button_padding = egui::vec2(10.0, 6.0);
+            ctx.set_style(style);
+            self.styled = true;
+        }
+        let compact = ui.available_width() < 1050.0;
         egui::Panel::top("notestrike_toolbar")
-            .exact_size(44.0)
+            .exact_size(54.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.strong("NoteStrike");
-                    ui.label(egui::RichText::new("by PWDS").small().weak());
+                    ui.heading("NoteStrike");
                     ui.separator();
-                    ui.label(self.root.display().to_string());
-                    ui.separator();
-                    ui.label(&self.status);
+                    let notebook_name = self.root.file_name().map(|name| name.to_string_lossy()).unwrap_or_default();
+                    ui.label(notebook_name.to_string()).on_hover_text(self.root.display().to_string());
                 });
             });
+        egui::Panel::bottom("notestrike_status")
+            .exact_size(30.0)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new(&self.status).small());
+            });
         egui::Panel::left("notestrike_notes")
-            .exact_size(270.0)
+            .exact_size(if compact { 230.0 } else { 270.0 })
             .show(ui, |ui| self.note_list(ui));
-        egui::Panel::right("notestrike_context")
-            .exact_size(240.0)
-            .show(ui, |ui| self.context_rail(ui));
-        egui::CentralPanel::default().show(ui, |ui| self.editor(ui));
+        if !compact {
+            egui::Panel::right("notestrike_context")
+                .exact_size(240.0)
+                .show(ui, |ui| self.context_rail(ui));
+        }
+        egui::CentralPanel::default().show(ui, |ui| {
+            if compact {
+                egui::CollapsingHeader::new("Details and backlinks")
+                    .show(ui, |ui| self.context_rail(ui));
+                ui.separator();
+            }
+            self.editor(ui);
+        });
         self.capture_after_frame(&ctx);
     }
 }
