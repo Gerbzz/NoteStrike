@@ -400,18 +400,19 @@ impl NativeEditor {
         scroll_to_end: bool,
     ) -> egui::containers::scroll_area::ScrollAreaOutput<()> {
         let visible_rows = ((ui.available_height().max(80.0) / 18.0).ceil() as usize).max(4);
-        let mut area = egui::ScrollArea::vertical()
+        egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .id_salt(("notestrike-source", id));
-        if scroll_to_end {
-            area = area.vertical_scroll_offset(f32::MAX);
-        }
-        area.show(ui, |ui| {
+            .id_salt(("notestrike-source", id))
+            .show(ui, |ui| {
             let editor = egui::TextEdit::multiline(&mut self.body_draft)
                 .desired_width(f32::INFINITY)
                 .desired_rows(visible_rows)
                 .code_editor();
-            if ui.add(editor).changed() {
+            let response = ui.add(editor);
+            if scroll_to_end {
+                ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+            }
+            if response.changed() {
                 self.dirty = self
                     .notebook
                     .get(id)
