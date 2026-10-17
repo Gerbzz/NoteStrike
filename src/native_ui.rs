@@ -283,7 +283,11 @@ impl NativeEditor {
                     .map(|note| (source, note.title.clone()))
             })
             .collect();
-        links.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+        links.sort_by(|a, b| {
+            a.1.to_lowercase()
+                .cmp(&b.1.to_lowercase())
+                .then(a.0.cmp(&b.0))
+        });
         links
     }
 
@@ -528,7 +532,10 @@ impl eframe::App for NativeEditor {
         }
         egui::CentralPanel::default().show(ui, |ui| {
             if compact {
-                let backlink_count = self.selected.map(|id| self.notebook.backlinks(id).len()).unwrap_or(0);
+                let backlink_count = self
+                    .selected
+                    .map(|id| self.notebook.backlinks(id).len())
+                    .unwrap_or(0);
                 egui::CollapsingHeader::new(format!("Details and backlinks ({backlink_count})"))
                     .default_open(true)
                     .show(ui, |ui| {
