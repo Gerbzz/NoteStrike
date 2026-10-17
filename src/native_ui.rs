@@ -329,7 +329,10 @@ impl NativeEditor {
     fn context_rail(&mut self, ui: &mut egui::Ui) {
         ui.heading("Details");
         if !self.notebook.warnings().is_empty() {
-            ui.colored_label(egui::Color32::from_rgb(139, 77, 22), "Unreadable note files");
+            ui.colored_label(
+                egui::Color32::from_rgb(139, 77, 22),
+                "Unreadable note files",
+            );
             for warning in self.notebook.warnings().iter().take(5) {
                 let name = warning
                     .path
