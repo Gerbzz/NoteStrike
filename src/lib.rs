@@ -20,3 +20,5 @@ pub mod recovery;
 pub mod search;
 pub mod workspace;
 
+#[cfg(feature = "native-ui")]
+pub mod native_ui;
