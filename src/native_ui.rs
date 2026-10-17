@@ -398,7 +398,7 @@ impl NativeEditor {
         ui: &mut egui::Ui,
         id: Uuid,
         scroll_to_end: bool,
-    ) -> egui::scroll_area::ScrollAreaOutput<()> {
+    ) -> egui::containers::scroll_area::ScrollAreaOutput<()> {
         let visible_rows = ((ui.available_height().max(80.0) / 18.0).ceil() as usize).max(4);
         let mut area = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -703,4 +703,43 @@ mod tests {
         );
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn long_source_scrolls_to_final_line_in_compact_viewport() {
+        let root = std::env::temp_dir().join(format!("notestrike-native-scroll-{}", Uuid::new_v4()));
+        let mut notebook = Notebook::create(&root).unwrap();
+        let mut body = String::from("# Project Hub\n\n");
+        for line in 1..=60 {
+            body.push_str(&format!("- Review item {line:02}: capture the next decision.\n"));
+        }
+        body.push_str("FINAL ACCESSIBLE LINE: save and close the review.\n");
+        let note = notebook.add("A Project Hub", &body).unwrap();
+        let mut editor = NativeEditor::new(root.clone(), notebook);
+        let context = egui::Context::default();
+        let mut measurement = None;
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 520.0),
+                )),
+                ..Default::default()
+            };
+            let _ = context.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let output = editor.source_editor(ui, note.id, true);
+                    measurement = Some((
+                        output.content_size.y,
+                        output.inner_rect.height(),
+                        output.state.offset.y,
+                    ));
+                });
+            });
+        }
+        let (content_height, viewport_height, scroll_offset) = measurement.unwrap();
+        assert!(content_height > viewport_height + 100.0);
+        assert!(scroll_offset > 100.0, "source editor did not scroll to the final line");
+        assert!(editor.body_draft.ends_with("FINAL ACCESSIBLE LINE: save and close the review.\n"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
 }
