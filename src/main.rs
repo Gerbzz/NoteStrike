@@ -95,15 +95,30 @@ fn main() -> ExitCode {
     if let Some(icon) = native_ui::window_icon() {
         viewport = viewport.with_icon(icon);
     }
-    let options = eframe::NativeOptions {
+    #[allow(unused_mut)] // only changed on macOS
+    let mut options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
+    // winit's default macOS menu quits through `terminate:`, which ends the
+    // process without asking about unsaved tabs. NoteStrike installs its own
+    // app menu whose Quit closes the window through the normal close request.
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_default_menu(false);
+        }));
+    }
     match eframe::run_native(
         "NoteStrike",
         options,
-        Box::new(move |_cc| Ok(Box::new(app))),
+        Box::new(move |_cc| {
+            #[cfg(target_os = "macos")]
+            notestrike::macos_menu::install();
+            Ok(Box::new(app))
+        }),
     ) {
         Ok(()) => match capture_result {
             None => ExitCode::SUCCESS,

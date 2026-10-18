@@ -1691,11 +1691,15 @@ version = "0.2.0"
 dependencies = [
  "eframe",
  "image",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "rfd",
  "same-file",
  "serde_json",
  "sha2",
  "uuid",
+ "winit",
 ]
 
 [[package]]

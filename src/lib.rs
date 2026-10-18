@@ -24,3 +24,6 @@ pub mod workspace;
 
 #[cfg(feature = "native-ui")]
 pub mod native_ui;
+
+#[cfg(all(feature = "native-ui", target_os = "macos"))]
+pub mod macos_menu;

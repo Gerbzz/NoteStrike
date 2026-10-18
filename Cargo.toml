@@ -13,9 +13,17 @@ eframe = { version = "=0.36.2", default-features = false, features = ["default_f
 image = { version = "0.25.10", default-features = false, features = ["png"], optional = true }
 rfd = { version = "=0.17.2", optional = true }
 
+# macOS application menu (src/macos_menu.rs). These are the versions eframe and
+# rfd already depend on, so they add no new crates to the build.
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = { version = "0.30.13", default-features = false, optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"], optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder"], optional = true }
+
 [features]
 default = ["native-ui"]
-native-ui = ["dep:eframe", "dep:image", "dep:rfd"]
+native-ui = ["dep:eframe", "dep:image", "dep:rfd", "dep:winit", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation"]
 
 # The desktop editor. Built by default; `--no-default-features` builds only the
 # library and the `notestrike-cli` helper.

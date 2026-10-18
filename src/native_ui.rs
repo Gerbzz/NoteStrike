@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Color32, FontId, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextBuffer,
+    self, Align, Color32, FontId, Key, KeyboardShortcut, Layout, RichText, TextBuffer,
     ViewportCommand,
 };
 use egui::text::{CCursor, CCursorRange, LayoutJob};
@@ -26,7 +26,8 @@ pub const APP_NAME: &str = "NoteStrike";
 pub const LOGO_PNG: &[u8] = include_bytes!("../assets/branding/NoteStrike.png");
 pub const PWDS_LOGO_PNG: &[u8] = include_bytes!("../assets/branding/PWDS-logo.png");
 
-/// Native file dialogs (Windows common item dialogs via `rfd`).
+/// Native file dialogs through `rfd`: the common item dialogs on Windows,
+/// NSOpenPanel/NSSavePanel on macOS, and GTK 3 (or the XDG portal) on Linux.
 pub struct NativeDialogs;
 
 impl FileDialogs for NativeDialogs {
@@ -100,6 +101,116 @@ pub struct NoteStrikeApp {
 }
 
 const BASE_FONT_SIZE: f32 = 14.0;
+
+/// Keyboard shortcuts. `Modifiers::COMMAND` is Ctrl on Windows and Linux and
+/// Cmd on macOS. Where macOS reserves or conventionally uses a different key
+/// (Cmd+H hides the app, Cmd+G is Find Next, Cmd+Tab switches apps), the Mac
+/// binding follows the Mac convention. Menu labels are generated from these
+/// definitions, so they always show the key that actually works.
+pub mod keys {
+    use eframe::egui::{Key, KeyboardShortcut, ModifierNames, Modifiers};
+
+    pub const IS_MAC: bool = cfg!(target_os = "macos");
+
+    const CMD: Modifiers = Modifiers::COMMAND;
+    const CMD_SHIFT: Modifiers = Modifiers::COMMAND.plus(Modifiers::SHIFT);
+    const fn cmd(key: Key) -> KeyboardShortcut {
+        KeyboardShortcut::new(CMD, key)
+    }
+    const fn pick(mac: KeyboardShortcut, other: KeyboardShortcut) -> KeyboardShortcut {
+        if IS_MAC { mac } else { other }
+    }
+
+    pub const NEW_TAB: KeyboardShortcut = cmd(Key::N);
+    pub const NEW_TAB_ALT: KeyboardShortcut = cmd(Key::T);
+    pub const OPEN: KeyboardShortcut = cmd(Key::O);
+    pub const SAVE: KeyboardShortcut = cmd(Key::S);
+    pub const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(CMD_SHIFT, Key::S);
+    pub const CLOSE_TAB: KeyboardShortcut = cmd(Key::W);
+    pub const CLOSE_TAB_ALT: KeyboardShortcut = cmd(Key::F4);
+    /// Ctrl+Tab on every platform: Cmd+Tab is the macOS app switcher.
+    pub const NEXT_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::Tab);
+    pub const PREVIOUS_TAB: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::Tab);
+    pub const UNDO: KeyboardShortcut = cmd(Key::Z);
+    pub const REDO: KeyboardShortcut = pick(KeyboardShortcut::new(CMD_SHIFT, Key::Z), cmd(Key::Y));
+    pub const CUT: KeyboardShortcut = cmd(Key::X);
+    pub const COPY: KeyboardShortcut = cmd(Key::C);
+    pub const PASTE: KeyboardShortcut = cmd(Key::V);
+    pub const SELECT_ALL: KeyboardShortcut = cmd(Key::A);
+    pub const FIND: KeyboardShortcut = cmd(Key::F);
+    pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
+    pub const FIND_PREVIOUS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::F3);
+    /// Cmd+G / Cmd+Shift+G on macOS, in addition to F3 / Shift+F3.
+    pub const FIND_NEXT_ALT: Option<KeyboardShortcut> =
+        if IS_MAC { Some(cmd(Key::G)) } else { None };
+    pub const FIND_PREVIOUS_ALT: Option<KeyboardShortcut> = if IS_MAC {
+        Some(KeyboardShortcut::new(CMD_SHIFT, Key::G))
+    } else {
+        None
+    };
+    /// Cmd+Option+F on macOS (Cmd+H hides the app); Ctrl+H elsewhere.
+    pub const REPLACE: KeyboardShortcut = pick(
+        KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::F),
+        cmd(Key::H),
+    );
+    /// Cmd+L on macOS (Cmd+G is Find Next there); Ctrl+G elsewhere.
+    pub const GO_TO_LINE: KeyboardShortcut = pick(cmd(Key::L), cmd(Key::G));
+    pub const ZOOM_IN: KeyboardShortcut = cmd(Key::Plus);
+    pub const ZOOM_IN_ALT: KeyboardShortcut = cmd(Key::Equals);
+    pub const ZOOM_OUT: KeyboardShortcut = cmd(Key::Minus);
+    pub const ZOOM_RESET: KeyboardShortcut = cmd(Key::Num0);
+
+    /// "Ctrl+S" on Windows and Linux, "Cmd+S" on macOS.
+    pub fn label(shortcut: KeyboardShortcut) -> String {
+        shortcut.format(&ModifierNames::NAMES, IS_MAC)
+    }
+
+    /// How the window is closed from the keyboard on this platform.
+    pub fn quit_label() -> &'static str {
+        if IS_MAC { "Cmd+Q" } else { "Alt+F4" }
+    }
+
+    /// The Help > Keyboard shortcuts text for this platform.
+    pub fn help_text() -> String {
+        let l = label;
+        let mut rows = vec![
+            (format!("{} / {}", l(NEW_TAB), l(NEW_TAB_ALT)), "New tab"),
+            (l(OPEN), "Open"),
+            (l(SAVE), "Save"),
+            (l(SAVE_AS), "Save as"),
+            (l(CLOSE_TAB), "Close tab"),
+            (
+                format!("{} / {}", l(NEXT_TAB), l(PREVIOUS_TAB)),
+                "Next / previous tab",
+            ),
+            (format!("{} / {}", l(UNDO), l(REDO)), "Undo / redo"),
+            (
+                format!("{} / {} / {}", l(CUT), l(COPY), l(PASTE)),
+                "Cut / copy / paste",
+            ),
+            (l(SELECT_ALL), "Select all"),
+            (l(FIND), "Find"),
+        ];
+        let mut next = format!("{} / {}", l(FIND_NEXT), l(FIND_PREVIOUS));
+        if let (Some(n), Some(p)) = (FIND_NEXT_ALT, FIND_PREVIOUS_ALT) {
+            next = format!("{next} or {} / {}", l(n), l(p));
+        }
+        rows.push((next, "Find next / previous"));
+        rows.push((l(REPLACE), "Replace"));
+        rows.push((l(GO_TO_LINE), "Go to line"));
+        rows.push((
+            format!("{} / {} / {}", l(ZOOM_IN), l(ZOOM_OUT), l(ZOOM_RESET)),
+            "Zoom in / out / reset",
+        ));
+        rows.push(("Esc".into(), "Close the find bar or a dialog"));
+        rows.push((quit_label().into(), "Exit"));
+        rows.iter()
+            .map(|(keys, action)| format!("{keys}\t{action}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
 
 /// Map the persisted theme setting to egui's preference. `System` lets egui
 /// follow the operating system's light/dark setting (reported by winit) and
@@ -212,6 +323,13 @@ impl NoteStrikeApp {
         }
         self.setup_done = true;
         install_system_fonts(ctx);
+        // winit reports the OS theme on Windows, macOS and some Wayland
+        // compositors, but never on X11. Ask the desktop instead, so System
+        // does not fall back to dark on a light Linux desktop.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(theme) = desktop_theme::detect() {
+            ctx.options_mut(|o| o.fallback_theme = theme);
+        }
         // Ctrl +/- zoom the text, not the whole interface.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
@@ -319,58 +437,56 @@ impl NoteStrikeApp {
         if self.ws.current_prompt().is_some() {
             return;
         }
-        let cmd = Modifiers::COMMAND;
-        let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
-        let pressed = |m: Modifiers, k: Key| {
-            ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)))
-        };
-        // Most specific first (Ctrl+Shift+S before Ctrl+S).
-        if pressed(cmd_shift, Key::S) {
+        let pressed = |shortcut: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&shortcut));
+        // egui matches Shift and Alt loosely, so the more specific shortcut
+        // must be tested first (Cmd/Ctrl+Shift+S before Cmd/Ctrl+S).
+        if pressed(keys::SAVE_AS) {
             self.ws.save_active(true, self.dialogs.as_mut());
-        } else if pressed(cmd, Key::S) {
+        } else if pressed(keys::SAVE) {
             self.ws.save_active(false, self.dialogs.as_mut());
         }
-        if pressed(cmd, Key::N) || pressed(cmd, Key::T) {
+        if pressed(keys::NEW_TAB) || pressed(keys::NEW_TAB_ALT) {
             self.ws.new_tab();
             self.focus_editor = true;
         }
-        if pressed(cmd, Key::O) {
+        if pressed(keys::OPEN) {
             self.ws.open_dialog(self.dialogs.as_mut());
         }
-        if (pressed(cmd, Key::W) || pressed(cmd, Key::F4))
+        if (pressed(keys::CLOSE_TAB) || pressed(keys::CLOSE_TAB_ALT))
             && let Some(id) = self.ws.active_tab().map(|t| t.id)
         {
             self.ws.request_close_tab(id);
         }
-        if pressed(cmd, Key::F) {
-            self.ws.show_find(false);
-        }
-        if pressed(cmd, Key::H) {
+        // Replace (Cmd+Option+F on macOS) before Find (Cmd+F).
+        if pressed(keys::REPLACE) {
             self.ws.show_find(true);
         }
-        if pressed(Modifiers::SHIFT, Key::F3) {
+        if pressed(keys::FIND) {
+            self.ws.show_find(false);
+        }
+        if pressed(keys::FIND_PREVIOUS) || keys::FIND_PREVIOUS_ALT.is_some_and(pressed) {
             self.find_and_show(false);
-        } else if pressed(Modifiers::NONE, Key::F3) {
+        } else if pressed(keys::FIND_NEXT) || keys::FIND_NEXT_ALT.is_some_and(pressed) {
             self.find_and_show(true);
         }
-        if pressed(cmd, Key::G) {
+        if pressed(keys::GO_TO_LINE) {
             self.goto_input.clear();
             self.ws.prompts.push_back(Prompt::GoToLine);
         }
-        if pressed(cmd_shift, Key::Tab) {
+        if pressed(keys::PREVIOUS_TAB) {
             self.ws.next_tab(false);
             self.focus_editor = true;
-        } else if pressed(cmd, Key::Tab) {
+        } else if pressed(keys::NEXT_TAB) {
             self.ws.next_tab(true);
             self.focus_editor = true;
         }
-        if pressed(cmd, Key::Plus) || pressed(cmd, Key::Equals) {
+        if pressed(keys::ZOOM_IN) || pressed(keys::ZOOM_IN_ALT) {
             self.zoom(10);
         }
-        if pressed(cmd, Key::Minus) {
+        if pressed(keys::ZOOM_OUT) {
             self.zoom(-10);
         }
-        if pressed(cmd, Key::Num0) {
+        if pressed(keys::ZOOM_RESET) {
             self.zoom(0);
         }
         if self.ws.find.visible && ctx.input(|i| i.key_pressed(Key::Escape)) {
@@ -390,20 +506,20 @@ impl NoteStrikeApp {
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.add(egui::Button::new("New tab").shortcut_text("Ctrl+N")).clicked() {
+                if ui.add(egui::Button::new("New tab").shortcut_text(keys::label(keys::NEW_TAB))).clicked() {
                     self.ws.new_tab();
                     self.focus_editor = true;
                 }
-                if ui.add(egui::Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
+                if ui.add(egui::Button::new("Open…").shortcut_text(keys::label(keys::OPEN))).clicked() {
                     ui.close();
                     self.ws.open_dialog(self.dialogs.as_mut());
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("Save").shortcut_text("Ctrl+S")).clicked() {
+                if ui.add(egui::Button::new("Save").shortcut_text(keys::label(keys::SAVE))).clicked() {
                     ui.close();
                     self.ws.save_active(false, self.dialogs.as_mut());
                 }
-                if ui.add(egui::Button::new("Save as…").shortcut_text("Ctrl+Shift+S")).clicked() {
+                if ui.add(egui::Button::new("Save as…").shortcut_text(keys::label(keys::SAVE_AS))).clicked() {
                     ui.close();
                     self.ws.save_active(true, self.dialogs.as_mut());
                 }
@@ -441,38 +557,38 @@ impl NoteStrikeApp {
                     self.ws.import_notebook(self.dialogs.as_mut());
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("Close tab").shortcut_text("Ctrl+W")).clicked() {
+                if ui.add(egui::Button::new("Close tab").shortcut_text(keys::label(keys::CLOSE_TAB))).clicked() {
                     ui.close();
                     if let Some(id) = self.ws.active_tab().map(|t| t.id) {
                         self.ws.request_close_tab(id);
                     }
                 }
-                if ui.add(egui::Button::new("Exit").shortcut_text("Alt+F4")).clicked() {
+                if ui.add(egui::Button::new(if keys::IS_MAC { "Quit NoteStrike" } else { "Exit" }).shortcut_text(keys::quit_label())).clicked() {
                     ui.close();
                     self.ws.request_quit();
                 }
             });
             ui.menu_button("Edit", |ui| {
-                if ui.add(egui::Button::new("Undo").shortcut_text("Ctrl+Z")).clicked() {
+                if ui.add(egui::Button::new("Undo").shortcut_text(keys::label(keys::UNDO))).clicked() {
                     ui.close();
                     self.undo_redo(ui.ctx(), false);
                 }
-                if ui.add(egui::Button::new("Redo").shortcut_text("Ctrl+Y")).clicked() {
+                if ui.add(egui::Button::new("Redo").shortcut_text(keys::label(keys::REDO))).clicked() {
                     ui.close();
                     self.undo_redo(ui.ctx(), true);
                 }
                 ui.separator();
                 for (label, shortcut, op) in [
-                    ("Cut", "Ctrl+X", ClipboardOp::Cut),
-                    ("Copy", "Ctrl+C", ClipboardOp::Copy),
-                    ("Paste", "Ctrl+V", ClipboardOp::Paste),
+                    ("Cut", keys::CUT, ClipboardOp::Cut),
+                    ("Copy", keys::COPY, ClipboardOp::Copy),
+                    ("Paste", keys::PASTE, ClipboardOp::Paste),
                 ] {
-                    if ui.add(egui::Button::new(label).shortcut_text(shortcut)).clicked() {
+                    if ui.add(egui::Button::new(label).shortcut_text(keys::label(shortcut))).clicked() {
                         ui.close();
                         self.clipboard_request = Some(op);
                     }
                 }
-                if ui.add(egui::Button::new("Select all").shortcut_text("Ctrl+A")).clicked() {
+                if ui.add(egui::Button::new("Select all").shortcut_text(keys::label(keys::SELECT_ALL))).clicked() {
                     ui.close();
                     if let Some(tab) = self.ws.active_tab() {
                         let end = tab.text.chars().count();
@@ -480,23 +596,23 @@ impl NoteStrikeApp {
                     }
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("Find…").shortcut_text("Ctrl+F")).clicked() {
+                if ui.add(egui::Button::new("Find…").shortcut_text(keys::label(keys::FIND))).clicked() {
                     ui.close();
                     self.ws.show_find(false);
                 }
-                if ui.add(egui::Button::new("Find next").shortcut_text("F3")).clicked() {
+                if ui.add(egui::Button::new("Find next").shortcut_text(keys::label(keys::FIND_NEXT))).clicked() {
                     ui.close();
                     self.find_and_show(true);
                 }
-                if ui.add(egui::Button::new("Find previous").shortcut_text("Shift+F3")).clicked() {
+                if ui.add(egui::Button::new("Find previous").shortcut_text(keys::label(keys::FIND_PREVIOUS))).clicked() {
                     ui.close();
                     self.find_and_show(false);
                 }
-                if ui.add(egui::Button::new("Replace…").shortcut_text("Ctrl+H")).clicked() {
+                if ui.add(egui::Button::new("Replace…").shortcut_text(keys::label(keys::REPLACE))).clicked() {
                     ui.close();
                     self.ws.show_find(true);
                 }
-                if ui.add(egui::Button::new("Go to line…").shortcut_text("Ctrl+G")).clicked() {
+                if ui.add(egui::Button::new("Go to line…").shortcut_text(keys::label(keys::GO_TO_LINE))).clicked() {
                     ui.close();
                     self.goto_input.clear();
                     self.ws.prompts.push_back(Prompt::GoToLine);
@@ -512,7 +628,7 @@ impl NoteStrikeApp {
                     .ws
                     .active_tab()
                     .map(|t| (t.eol, t.encoding))
-                    .unwrap_or((LineEnding::CrLf, TextEncoding::Utf8));
+                    .unwrap_or((LineEnding::platform_default(), TextEncoding::Utf8));
                 ui.menu_button("Line endings", |ui| {
                     for eol in LineEnding::ALL {
                         if ui.radio(current_eol == eol, eol.label()).clicked() {
@@ -532,20 +648,20 @@ impl NoteStrikeApp {
             });
             ui.menu_button("View", |ui| {
                 ui.menu_button("Zoom", |ui| {
-                    if ui.add(egui::Button::new("Zoom in").shortcut_text("Ctrl+Plus")).clicked() {
+                    if ui.add(egui::Button::new("Zoom in").shortcut_text(keys::label(keys::ZOOM_IN))).clicked() {
                         self.zoom(10);
                     }
-                    if ui.add(egui::Button::new("Zoom out").shortcut_text("Ctrl+Minus")).clicked() {
+                    if ui.add(egui::Button::new("Zoom out").shortcut_text(keys::label(keys::ZOOM_OUT))).clicked() {
                         self.zoom(-10);
                     }
-                    if ui.add(egui::Button::new("Restore default zoom").shortcut_text("Ctrl+0")).clicked() {
+                    if ui.add(egui::Button::new("Restore default zoom").shortcut_text(keys::label(keys::ZOOM_RESET))).clicked() {
                         self.zoom(0);
                     }
                 });
                 ui.checkbox(&mut self.ws.settings.status_bar, "Status bar");
                 ui.menu_button("Theme", |ui| {
                     for (choice, label) in [
-                        (ThemeChoice::System, "System (follow Windows)"),
+                        (ThemeChoice::System, SYSTEM_THEME_LABEL),
                         (ThemeChoice::Light, "Light"),
                         (ThemeChoice::Dark, "Dark"),
                     ] {
@@ -562,7 +678,7 @@ impl NoteStrikeApp {
                     ui.close();
                     self.ws.prompts.push_back(Prompt::Message {
                         title: "Keyboard shortcuts".into(),
-                        body: SHORTCUTS_HELP.into(),
+                        body: keys::help_text(),
                     });
                 }
                 if ui.button("About NoteStrike").clicked() {
@@ -650,7 +766,10 @@ impl NoteStrikeApp {
                                             .frame_when_inactive(false)
                                             .small(),
                                     )
-                                    .on_hover_text("Close tab (Ctrl+W)");
+                                    .on_hover_text(format!(
+                                        "Close tab ({})",
+                                        keys::label(keys::CLOSE_TAB)
+                                    ));
                                 let close_name = format!("Close {title}");
                                 close_btn.widget_info(|| {
                                     egui::WidgetInfo::labeled(
@@ -670,7 +789,7 @@ impl NoteStrikeApp {
                             egui::Button::new(RichText::new("+").size(16.0))
                                 .frame_when_inactive(false),
                         )
-                        .on_hover_text("New tab (Ctrl+N)");
+                        .on_hover_text(format!("New tab ({})", keys::label(keys::NEW_TAB)));
                     plus.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "New tab")
                     });
@@ -1012,7 +1131,7 @@ impl NoteStrikeApp {
             ui.separator();
             if width > 560.0 {
                 ui.label(format!("{}%", self.ws.settings.zoom_percent))
-                    .on_hover_text("Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0)");
+                    .on_hover_text(format!("Zoom ({} / {} / {})", keys::label(keys::ZOOM_IN), keys::label(keys::ZOOM_OUT), keys::label(keys::ZOOM_RESET)));
                 ui.separator();
             }
             if width > 700.0 {
@@ -1295,7 +1414,7 @@ impl eframe::App for NoteStrikeApp {
             self.ws.open_paths(&dropped);
         }
 
-        // Window close button / Alt+F4: ask about unsaved tabs first.
+        // Window close button / Alt+F4 / Cmd+Q (macos_menu): ask about unsaved tabs first.
         if ctx.input(|i| i.viewport().close_requested()) && !self.closing {
             self.ws.request_quit();
             if !self.ws.quit_approved() {
@@ -1372,43 +1491,117 @@ impl eframe::App for NoteStrikeApp {
     }
 }
 
-const SHORTCUTS_HELP: &str = "Ctrl+N / Ctrl+T\tNew tab\n\
-Ctrl+O\tOpen\n\
-Ctrl+S\tSave\n\
-Ctrl+Shift+S\tSave as\n\
-Ctrl+W\tClose tab\n\
-Ctrl+Tab / Ctrl+Shift+Tab\tNext / previous tab\n\
-Ctrl+Z / Ctrl+Y\tUndo / redo\n\
-Ctrl+X / Ctrl+C / Ctrl+V\tCut / copy / paste\n\
-Ctrl+A\tSelect all\n\
-Ctrl+F\tFind\n\
-F3 / Shift+F3\tFind next / previous\n\
-Ctrl+H\tReplace\n\
-Ctrl+G\tGo to line\n\
-Ctrl+Plus / Ctrl+Minus / Ctrl+0\tZoom in / out / reset\n\
-Esc\tClose the find bar or a dialog\n\
-Alt+F4\tExit";
+/// Light/dark preference of a Linux desktop (GNOME and GTK-based desktops):
+/// `GTK_THEME`, then the `color-scheme` and `gtk-theme` GSettings keys.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+mod desktop_theme {
+    use eframe::egui::Theme;
 
-/// Prefer the Windows UI and monospace fonts when installed (loaded from the
-/// user's own system at runtime, never bundled); egui's built-in fonts stay
-/// as fallbacks for missing glyphs.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    pub fn detect() -> Option<Theme> {
+        if let Some(name) = std::env::var_os("GTK_THEME") {
+            return Some(from_gtk_theme_name(&name.to_string_lossy()));
+        }
+        let gsettings = |key: &str| {
+            std::process::Command::new("gsettings")
+                .args(["get", "org.gnome.desktop.interface", key])
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        };
+        if let Some(theme) = gsettings("color-scheme").and_then(|v| from_color_scheme(&v)) {
+            return Some(theme);
+        }
+        gsettings("gtk-theme").map(|v| from_gtk_theme_name(&v))
+    }
+
+    /// `'prefer-dark'` / `'prefer-light'`; `'default'` means "not set".
+    pub fn from_color_scheme(value: &str) -> Option<Theme> {
+        match value.trim().trim_matches('\'') {
+            "prefer-dark" => Some(Theme::Dark),
+            "prefer-light" => Some(Theme::Light),
+            _ => None,
+        }
+    }
+
+    /// Theme names such as `Adwaita:dark`, `'Yaru-dark'` or `Breeze`.
+    pub fn from_gtk_theme_name(name: &str) -> Theme {
+        if name.to_ascii_lowercase().contains("dark") {
+            Theme::Dark
+        } else {
+            Theme::Light
+        }
+    }
+}
+
+/// Label of View > Theme > System for this platform.
+const SYSTEM_THEME_LABEL: &str = if cfg!(windows) {
+    "System (follow Windows)"
+} else if cfg!(target_os = "macos") {
+    "System (follow macOS)"
+} else {
+    "System (follow desktop)"
+};
+
+type FontCandidates = [(&'static str, &'static [&'static str], egui::FontFamily); 2];
+
+/// Segoe UI and Consolas (or Cascadia Mono), installed with Windows.
+#[cfg(windows)]
+const SYSTEM_FONTS: FontCandidates = [
+    (
+        "system-ui",
+        &["C:\\Windows\\Fonts\\segoeui.ttf"],
+        egui::FontFamily::Proportional,
+    ),
+    (
+        "system-mono",
+        &[
+            "C:\\Windows\\Fonts\\consola.ttf",
+            "C:\\Windows\\Fonts\\CascadiaMono.ttf",
+        ],
+        egui::FontFamily::Monospace,
+    ),
+];
+
+/// DejaVu, installed by most Linux desktops (Debian/Ubuntu and Fedora paths).
+#[cfg(all(unix, not(target_os = "macos")))]
+const SYSTEM_FONTS: FontCandidates = [
+    (
+        "system-ui",
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ],
+        egui::FontFamily::Proportional,
+    ),
+    (
+        "system-mono",
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        ],
+        egui::FontFamily::Monospace,
+    ),
+];
+
+/// macOS system fonts ship as collections and variable fonts; egui's built-in
+/// fonts are used there.
+#[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+const SYSTEM_FONTS: FontCandidates = [
+    ("system-ui", &[], egui::FontFamily::Proportional),
+    ("system-mono", &[], egui::FontFamily::Monospace),
+];
+
+/// Prefer the platform's UI and monospace fonts when installed (loaded from
+/// the user's own system at runtime, never bundled); egui's built-in fonts
+/// stay as fallbacks for missing glyphs.
 fn install_system_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let candidates: [(&str, &[&str], egui::FontFamily); 2] = [
-        (
-            "system-ui",
-            &["C:\\Windows\\Fonts\\segoeui.ttf"],
-            egui::FontFamily::Proportional,
-        ),
-        (
-            "system-mono",
-            &[
-                "C:\\Windows\\Fonts\\consola.ttf",
-                "C:\\Windows\\Fonts\\CascadiaMono.ttf",
-            ],
-            egui::FontFamily::Monospace,
-        ),
-    ];
+    let candidates = SYSTEM_FONTS;
     let mut changed = false;
     for (name, paths, family) in candidates {
         if let Some(bytes) = paths.iter().find_map(|p| std::fs::read(p).ok()) {
@@ -1491,6 +1684,7 @@ mod tests {
     use super::*;
     use crate::encoding::Unrepresentable;
     use crate::workspace::PendingSave;
+    use eframe::egui::Modifiers;
 
     #[derive(Default)]
     struct Scripted {
@@ -1881,5 +2075,77 @@ mod tests {
         let (a, b) = (range.primary.index, range.secondary.index);
         assert_eq!((usize::from(a.min(b)), usize::from(a.max(b))), (4, 7));
         assert_eq!(app.ws.selection, (4, 7));
+    }
+
+    fn key_event(shortcut: KeyboardShortcut) -> egui::Event {
+        egui::Event::Key {
+            key: shortcut.logical_key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: shortcut.modifiers,
+        }
+    }
+
+    #[test]
+    fn shortcut_labels_follow_the_platform() {
+        let save = keys::label(keys::SAVE);
+        if cfg!(target_os = "macos") {
+            assert_eq!(save, "Cmd+S");
+            assert_eq!(keys::label(keys::REDO), "Shift+Cmd+Z");
+            assert_ne!(
+                keys::REPLACE,
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::H)
+            );
+            assert_eq!(keys::quit_label(), "Cmd+Q");
+        } else {
+            assert_eq!(save, "Ctrl+S");
+            assert_eq!(keys::label(keys::SAVE_AS), "Ctrl+Shift+S");
+            assert_eq!(keys::label(keys::REPLACE), "Ctrl+H");
+            assert_eq!(keys::quit_label(), "Alt+F4");
+        }
+        assert_eq!(keys::label(keys::NEXT_TAB), "Ctrl+Tab");
+        let help = keys::help_text();
+        assert!(help.contains(&format!("{save}	Save")), "{help}");
+        assert_eq!(help.contains("Cmd"), cfg!(target_os = "macos"), "{help}");
+    }
+
+    #[test]
+    fn replace_shortcut_opens_replace_not_plain_find() {
+        let mut app = app_with(Scripted::default());
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, vec![key_event(keys::REPLACE)], false);
+        assert!(app.ws.find.visible && app.ws.find.replace_visible);
+        app.ws.find.visible = false;
+        frame(&mut app, &ctx, vec![key_event(keys::FIND)], false);
+        assert!(app.ws.find.visible && !app.ws.find.replace_visible);
+        frame(&mut app, &ctx, vec![key_event(keys::GO_TO_LINE)], false);
+        assert!(matches!(app.ws.current_prompt(), Some(Prompt::GoToLine)));
+    }
+
+    #[test]
+    fn linux_desktop_theme_values_are_parsed() {
+        use egui::Theme;
+        assert_eq!(
+            desktop_theme::from_color_scheme("'prefer-dark'\n"),
+            Some(Theme::Dark)
+        );
+        assert_eq!(
+            desktop_theme::from_color_scheme("'prefer-light'"),
+            Some(Theme::Light)
+        );
+        assert_eq!(desktop_theme::from_color_scheme("'default'"), None);
+        assert_eq!(
+            desktop_theme::from_gtk_theme_name("Adwaita:dark"),
+            Theme::Dark
+        );
+        assert_eq!(
+            desktop_theme::from_gtk_theme_name("'Yaru-dark'\n"),
+            Theme::Dark
+        );
+        assert_eq!(
+            desktop_theme::from_gtk_theme_name("'Adwaita'"),
+            Theme::Light
+        );
     }
 }
