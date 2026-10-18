@@ -13,7 +13,7 @@ Tabs, safe saves, encodings and line endings handled honestly, and your unsaved 
 
 ![NoteStrike editing a sample checklist in the light theme, with two tabs and the status bar showing line, column, line endings and encoding](assets/screenshots/notestrike-editor-light.png)
 
-*Real NoteStrike window, captured from the current build with sample text (see [screenshot notes](#screenshots)).*
+*Real NoteStrike window in the **Light** theme, captured from the current build with sample text. Dark-theme captures are under [Screenshots](#screenshots).*
 
 ## Why NoteStrike
 
@@ -34,7 +34,8 @@ Everything in this list is implemented and covered by automated tests (see [Veri
 - Plain-text editing in tabs, with new, open, save, save as, save all, and close tab.
 - Find and replace: match case, whole word, wrap around, find next/previous, replace, replace all, and a live match count.
 - Go to line, undo/redo, cut/copy/paste, select all.
-- Word wrap, text zoom (50–400%), light, dark, or system theme. Settings are remembered.
+- Word wrap and text zoom (50–400%).
+- **Themes:** View > Theme > System (follow Windows) / Light / Dark. The default is System. A change applies immediately and is remembered across restarts (in `settings.json`). If Windows does not report a preference, System uses the dark theme (egui's fallback). Both themes are checked against WCAG AA contrast in the tests: text, dialogs, notices, selection, links, and buttons.
 - Open files from the command line (`notestrike a.txt b.log`) or by dragging them onto the window.
 
 ### Encodings and line endings
@@ -58,11 +59,17 @@ Everything in this list is implemented and covered by automated tests (see [Veri
 
 ## Screenshots
 
-| Damaged UTF-8 file, dark theme | Narrow window | Recovery after a crash |
-|---|---|---|
-| ![Dark theme showing a notice about one undecodable byte with Reopen as Windows-1252 and Reopen as UTF-16 LE buttons, plus a mixed line endings notice](assets/screenshots/notestrike-damaged-utf8-dark.png) | ![NoteStrike at 420 pixels wide with word-wrapped sample text](assets/screenshots/notestrike-compact.png) | ![Recover unsaved work dialog listing an untitled document with Restore, Discard and Later buttons](assets/screenshots/notestrike-crash-recovery.png) |
+Every image is a real frame of the current build in the theme named under it. All text is sample content.
 
-All four screenshots are real frames of the current build. The app's own `--capture` mode rendered each one and saved it at the window's size. They are not mockups. All text in them is sample content written for the screenshots. The recovery dialog shows a journal left by a process that really aborted mid-session. [docs/screenshots.md](docs/screenshots.md) records the exact commands and hashes.
+| Light theme | Dark theme |
+|---|---|
+| ![Editor in the light theme with two tabs and the status bar](assets/screenshots/notestrike-editor-light.png)<br>**Editor, Light** | ![Editor in the dark theme with two tabs and the status bar](assets/screenshots/notestrike-editor-dark.png)<br>**Editor, Dark** |
+| ![Find and replace bar in the light theme with the match "booking" selected in the text](assets/screenshots/notestrike-find-replace-light.png)<br>**Find and replace, Light** | ![Find and replace bar in the dark theme with the match "booking" selected in the text](assets/screenshots/notestrike-find-replace-dark.png)<br>**Find and replace, Dark** |
+| ![About dialog in the light theme with the NoteStrike and PWDS logos](assets/screenshots/notestrike-about-light.png)<br>**About, Light** | ![About dialog in the dark theme; the PWDS logo sits on a light plate](assets/screenshots/notestrike-about-dark.png)<br>**About, Dark** |
+| ![Notices for an undecodable byte and mixed line endings in the light theme](assets/screenshots/notestrike-damaged-utf8-light.png)<br>**Damaged UTF-8 notices, Light** | ![Notices for an undecodable byte and mixed line endings in the dark theme](assets/screenshots/notestrike-damaged-utf8-dark.png)<br>**Damaged UTF-8 notices, Dark** |
+| ![NoteStrike at 420 pixels wide with word-wrapped sample text](assets/screenshots/notestrike-compact-light.png)<br>**Narrow window (420 px), Light** | ![Recover unsaved work dialog listing an untitled document](assets/screenshots/notestrike-crash-recovery-light.png)<br>**Recovery after a real crash, Light** |
+
+The app's own `--capture` mode rendered and saved each frame at the window's size. For the find/replace and About shots it was run with `--find` or `--about`, which open that bar or dialog before the frame is taken. These are not mockups. [docs/screenshots.md](docs/screenshots.md) records the commands and hashes.
 
 ## Keyboard shortcuts
 
@@ -108,7 +115,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-The tests (51 passing, plus one helper that a test runs as a child process) create their own files in the system temp folder and never touch user documents. They cover:
+The tests (56 passing, plus one helper that a test runs as a child process) create their own files in the system temp folder and never touch user documents. They cover:
 
 - Round trips of every encoding and line ending, byte for byte.
 - Damaged UTF-8 and UTF-16, binary files, and Windows-1252 fallback.
@@ -116,7 +123,8 @@ The tests (51 passing, plus one helper that a test runs as a child process) crea
 - Cancelling every dialog and prompt; save/close/quit flows; reopening.
 - Recovery after a simulated crash and after a real `abort()` of a child process.
 - The 0.1 notebook import, with byte and timestamp checks proving the notebook is unchanged.
-- Headless frames of the real UI: typing, Ctrl+S, the window close request, and every prompt.
+- Headless frames of the real UI: typing, Ctrl+S, the window close request, every prompt, and find selection.
+- Themes: System follows the OS and explicit choices override it, a change applies on the next frame, the choice persists across a restart, and every colour pair passes WCAG AA in both themes.
 
 ## Limitations
 
