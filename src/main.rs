@@ -107,9 +107,11 @@ fn main() -> ExitCode {
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
-        options.event_loop_builder = Some(Box::new(|builder| {
-            builder.with_default_menu(false);
-        }));
+        options.event_loop_builder = Some(Box::new(
+            |builder: &mut eframe::EventLoopBuilder<eframe::UserEvent>| {
+                builder.with_default_menu(false);
+            },
+        ));
     }
     match eframe::run_native(
         "NoteStrike",
