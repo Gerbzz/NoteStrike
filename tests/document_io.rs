@@ -252,3 +252,37 @@ fn save_into_missing_folder_fails_without_side_effects() {
     ));
     assert!(!dir.join("missing-folder").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn unix_save_keeps_the_original_permission_bits() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("unix-mode");
+    for mode in [0o600, 0o640, 0o755] {
+        let path = dir.join(&format!("mode-{mode:o}.txt"));
+        fs::write(&path, b"before").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        let loaded = document::load(&path, LoadOptions::default()).unwrap();
+        assert!(!loaded.read_only);
+        document::save(&request(&path, "after", Some(&loaded.snapshot))).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"after");
+        let saved = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(saved, mode, "mode of {}", path.display());
+    }
+}
+
+#[test]
+fn save_replaces_an_existing_file_on_this_platform() {
+    // rename-over-existing must work everywhere (MoveFileExW on Windows,
+    // rename(2) on Unix), repeatedly, without leaving temporary files.
+    let dir = TempDir::new("replace");
+    let path = dir.join("again.txt");
+    let mut snapshot = document::save(&request(&path, "v0", None)).unwrap();
+    for round in 1..=5 {
+        let text = format!("v{round}");
+        snapshot = document::save(&request(&path, &text, Some(&snapshot))).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+    }
+    assert!(temp_files(dir.path()).is_empty());
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+}

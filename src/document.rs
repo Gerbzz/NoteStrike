@@ -4,6 +4,16 @@
 //! * Saves are atomic: the bytes go to a temporary file in the same folder,
 //!   are flushed with `fsync`, and only then renamed over the target. An
 //!   interrupted save leaves the original file untouched.
+//!   Platform notes: `rename` replaces an existing file on every OS (on
+//!   Windows std uses `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`), but Windows
+//!   can briefly refuse while a scanner holds the file, so that case is
+//!   retried. On Unix the folder is `fsync`ed after the rename so the new
+//!   name survives a power cut, and the original file's permission bits are
+//!   copied to the replacement (an `0600` file stays private).
+//! * A file is read-only when its read-only attribute / write bits say so
+//!   or, on Unix, when this user cannot open it for writing (for example a
+//!   file owned by root in a folder the user can write to: replacing it by
+//!   rename would otherwise succeed).
 //! * Every loaded or saved file keeps a [`DiskSnapshot`] (length, modified
 //!   time, SHA-256) so a save refuses to overwrite a file that another program
 //!   changed, unless the user explicitly chooses to overwrite it.
@@ -159,7 +169,7 @@ pub fn load(path: &Path, options: LoadOptions) -> Result<LoadedFile, LoadError> 
         invalid_sequences: decoded.invalid_sequences,
         first_invalid_offset: decoded.first_invalid_offset,
         contains_nul: decoded.contains_nul,
-        read_only: metadata.permissions().readonly(),
+        read_only: is_read_only(path, &metadata),
         snapshot: DiskSnapshot::of_bytes(&bytes, modified),
     })
 }
@@ -306,7 +316,7 @@ pub fn save_with_faults(
             if !metadata.is_file() {
                 return Err(SaveError::Io("the target is not a regular file".into()));
             }
-            if metadata.permissions().readonly() {
+            if is_read_only(&target, &metadata) {
                 return Err(SaveError::ReadOnly);
             }
             if let Some(expected) = request.expected
@@ -414,6 +424,7 @@ fn write_atomic_impl<E>(
             "simulated interruption before rename",
         )));
     }
+    copy_permissions(path, &temp);
     if let Err(error) = rename_with_retry(&temp, path, &mut check_target, &map_io) {
         let _ = fs::remove_file(&temp);
         return Err(error);
@@ -452,6 +463,37 @@ fn transient_windows_sharing_error(error: &io::Error) -> bool {
     // is not retried: it is how Windows reports read-only or ACL refusals.
     cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33))
 }
+
+/// Read-only attribute (Windows) / no write bits (Unix), or, on Unix, this
+/// user may not write the file. Opening for writing without truncation does
+/// not change the file.
+fn is_read_only(path: &Path, metadata: &fs::Metadata) -> bool {
+    if metadata.permissions().readonly() {
+        return true;
+    }
+    #[cfg(unix)]
+    if let Err(error) = OpenOptions::new().write(true).open(path)
+        && error.kind() == io::ErrorKind::PermissionDenied
+    {
+        return true;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    false
+}
+
+/// The replacement file is new, so on Unix it would get default permissions
+/// (umask). Keep the original's mode instead. Windows has only the read-only
+/// attribute here, which is never set on a file being saved.
+#[cfg(unix)]
+fn copy_permissions(original: &Path, replacement: &Path) {
+    if let Ok(metadata) = fs::metadata(original) {
+        let _ = fs::set_permissions(replacement, metadata.permissions());
+    }
+}
+
+#[cfg(not(unix))]
+fn copy_permissions(_original: &Path, _replacement: &Path) {}
 
 #[cfg(unix)]
 fn sync_dir(dir: &Path) {
