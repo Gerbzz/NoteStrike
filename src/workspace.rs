@@ -1010,6 +1010,8 @@ impl Workspace {
                     tab.encoding = entry.encoding;
                     tab.utf16_bom = entry.utf16_bom;
                     tab.eol = entry.eol;
+                    tab.invalid_sequences = entry.invalid_sequences;
+                    tab.first_invalid_offset = entry.first_invalid_offset;
                     tab.saved_format = (entry.encoding, entry.utf16_bom, entry.eol);
                     if let Some(hash) = entry
                         .base_hash
@@ -1068,6 +1070,8 @@ impl Workspace {
             encoding: tab.encoding,
             utf16_bom: tab.utf16_bom,
             eol: tab.eol,
+            invalid_sequences: tab.invalid_sequences,
+            first_invalid_offset: tab.first_invalid_offset,
             base_hash: tab.snapshot.as_ref().map(DiskSnapshot::hash_hex),
             base_len: tab.snapshot.as_ref().map(|s| s.len),
             saved_unix: recovery::now_unix(),

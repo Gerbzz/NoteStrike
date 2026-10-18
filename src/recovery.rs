@@ -51,6 +51,9 @@ pub struct JournalEntry {
     pub encoding: TextEncoding,
     pub utf16_bom: bool,
     pub eol: LineEnding,
+    /// Decoder loss must survive a crash so saving cannot silently replace bytes.
+    pub invalid_sequences: usize,
+    pub first_invalid_offset: Option<usize>,
     /// SHA-256 (hex) of the file on disk the unsaved text was based on.
     pub base_hash: Option<String>,
     pub base_len: Option<u64>,
@@ -69,6 +72,8 @@ impl JournalEntry {
             "encoding": self.encoding.id(),
             "utf16_bom": self.utf16_bom,
             "eol": self.eol.short(),
+            "invalid_sequences": self.invalid_sequences,
+            "first_invalid_offset": self.first_invalid_offset,
             "base_hash": self.base_hash,
             "base_len": self.base_len,
             "saved_unix": self.saved_unix,
@@ -79,6 +84,10 @@ impl JournalEntry {
         if value.get("format")?.as_str()? != "notestrike-recovery-1" {
             return None;
         }
+        // Older journals did not record decoder loss. Be conservative for
+        // recovered edits to files: their original bytes may be undecodable.
+        let legacy_may_be_lossy = value.get("path").and_then(Value::as_str).is_some()
+            && value.get("text").and_then(Value::as_str).is_some();
         Some(Self {
             tab_id: value.get("tab_id")?.as_u64()?,
             position: value.get("position").and_then(Value::as_u64).unwrap_or(0) as usize,
@@ -91,6 +100,15 @@ impl JournalEntry {
                 .and_then(Value::as_bool)
                 .unwrap_or(true),
             eol: LineEnding::from_short(value.get("eol")?.as_str()?)?,
+            invalid_sequences: value
+                .get("invalid_sequences")
+                .and_then(Value::as_u64)
+                .map(|count| usize::try_from(count).unwrap_or(usize::MAX))
+                .unwrap_or(usize::from(legacy_may_be_lossy)),
+            first_invalid_offset: value
+                .get("first_invalid_offset")
+                .and_then(Value::as_u64)
+                .and_then(|offset| usize::try_from(offset).ok()),
             base_hash: value
                 .get("base_hash")
                 .and_then(Value::as_str)
@@ -275,5 +293,29 @@ fn session_is_alive(dir: &Path, session: &str) -> bool {
         }
         Err(fs::TryLockError::WouldBlock) => true,
         Err(fs::TryLockError::Error(_)) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JournalEntry;
+    use serde_json::json;
+
+    #[test]
+    fn old_file_journal_requires_lossy_confirmation_when_damage_is_unknown() {
+        let old = json!({
+            "format": "notestrike-recovery-1",
+            "tab_id": 7,
+            "title": "damaged.txt",
+            "path": "damaged.txt",
+            "text": "edited text",
+            "encoding": "utf-8",
+            "eol": "LF"
+        });
+        let entry = JournalEntry::from_json(&old).unwrap();
+        assert_eq!(entry.invalid_sequences, 1);
+        assert_eq!(entry.first_invalid_offset, None);
+        let round_trip = JournalEntry::from_json(&entry.to_json()).unwrap();
+        assert_eq!(round_trip.invalid_sequences, 1);
     }
 }

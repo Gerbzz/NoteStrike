@@ -97,7 +97,7 @@ impl std::fmt::Display for LoadError {
                 hard_limit: true,
             } => write!(
                 f,
-                "the file is {} — larger than NoteStrike's {} limit for plain-text editing",
+                "the file is {} - larger than NoteStrike's {} limit for plain-text editing",
                 human_size(*size),
                 human_size(HARD_SIZE_LIMIT)
             ),
@@ -327,7 +327,23 @@ pub fn save_with_faults(
         }
         Err(error) => return Err(io_error(error)),
     }
-    write_atomic(&target, &bytes, faults).map_err(io_error)?;
+    write_atomic_impl(
+        &target,
+        &bytes,
+        faults,
+        || {
+            if let Some(expected) = request.expected
+                && !request.overwrite_external_changes
+            {
+                let (state, _) = disk_state_exact(&target, expected).map_err(io_error)?;
+                if state != DiskState::Unchanged {
+                    return Err(SaveError::ChangedOnDisk);
+                }
+            }
+            Ok(())
+        },
+        io_error,
+    )?;
     let modified = fs::metadata(&target).ok().and_then(|m| m.modified().ok());
     Ok(DiskSnapshot::of_bytes(&bytes, modified))
 }
@@ -357,6 +373,16 @@ pub const TEMP_MARKER: &str = ".notestrike-save-";
 /// `fsync`, then rename over the target (and `fsync` the directory on Unix).
 #[doc(hidden)]
 pub fn write_atomic(path: &Path, bytes: &[u8], faults: FaultPlan) -> io::Result<()> {
+    write_atomic_impl(path, bytes, faults, || Ok(()), |error| error)
+}
+
+fn write_atomic_impl<E>(
+    path: &Path,
+    bytes: &[u8],
+    faults: FaultPlan,
+    mut check_target: impl FnMut() -> Result<(), E>,
+    map_io: impl Fn(io::Error) -> E,
+) -> Result<(), E> {
     let dir = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
@@ -372,20 +398,23 @@ pub fn write_atomic(path: &Path, bytes: &[u8], faults: FaultPlan) -> io::Result<
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&temp)?;
+        .open(&temp)
+        .map_err(&map_io)?;
     let written = file.write_all(bytes).and_then(|()| file.sync_all());
     drop(file);
     if let Err(error) = written {
         let _ = fs::remove_file(&temp);
-        return Err(error);
+        return Err(map_io(error));
     }
     if faults.fail_before_rename {
         if !faults.leave_temp_file {
             let _ = fs::remove_file(&temp);
         }
-        return Err(io::Error::other("simulated interruption before rename"));
+        return Err(map_io(io::Error::other(
+            "simulated interruption before rename",
+        )));
     }
-    if let Err(error) = rename_with_retry(&temp, path) {
+    if let Err(error) = rename_with_retry(&temp, path, &mut check_target, &map_io) {
         let _ = fs::remove_file(&temp);
         return Err(error);
     }
@@ -396,16 +425,24 @@ pub fn write_atomic(path: &Path, bytes: &[u8], faults: FaultPlan) -> io::Result<
 /// Antivirus scanners and search indexers briefly lock files on Windows. A
 /// sharing violation is retried for up to two seconds; anything else fails.
 /// (Retry policy reused from the previous NoteStrike notebook store.)
-fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
+fn rename_with_retry<E>(
+    from: &Path,
+    to: &Path,
+    check_target: &mut impl FnMut() -> Result<(), E>,
+    map_io: &impl Fn(io::Error) -> E,
+) -> Result<(), E> {
     let mut attempt = 0;
     loop {
+        // A Windows sharing lock can release after another program has edited
+        // the file. Recheck immediately before every replacement attempt.
+        check_target()?;
         match fs::rename(from, to) {
             Ok(()) => return Ok(()),
             Err(error) if transient_windows_sharing_error(&error) && attempt < 40 => {
                 attempt += 1;
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(map_io(error)),
         }
     }
 }
@@ -425,3 +462,40 @@ fn sync_dir(dir: &Path) {
 
 #[cfg(not(unix))]
 fn sync_dir(_dir: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn external_edit_after_staging_prevents_replacement() {
+        let dir = std::env::temp_dir().join(format!("notestrike-guard-{}", Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("document.txt");
+        fs::write(&path, b"original").unwrap();
+        let expected = DiskSnapshot::of_bytes(b"original", None);
+
+        let result = write_atomic_impl(
+            &path,
+            b"my edit",
+            FaultPlan::default(),
+            || {
+                fs::write(&path, b"external edit").unwrap();
+                let (state, _) = disk_state_exact(&path, &expected).map_err(io_error)?;
+                if state != DiskState::Unchanged {
+                    return Err(SaveError::ChangedOnDisk);
+                }
+                Ok(())
+            },
+            io_error,
+        );
+        assert_eq!(result, Err(SaveError::ChangedOnDisk));
+        assert_eq!(fs::read(&path).unwrap(), b"external edit");
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "staged file cleaned up"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

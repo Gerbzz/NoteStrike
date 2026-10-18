@@ -83,6 +83,40 @@ fn simulated_crash_offers_and_restores_unsaved_text() {
 }
 
 #[test]
+fn recovered_undecodable_file_still_requires_lossy_save_confirmation() {
+    let data = TempDir::new("recovery-lossy");
+    let docs = TempDir::new("recovery-lossy-docs");
+    let path = docs.join("damaged.txt");
+    let original = b"caf\xC3\xA9 \xFF end".to_vec();
+    fs::write(&path, &original).unwrap();
+    {
+        let mut ws = Workspace::new(
+            Some(RecoveryStore::open(data.path()).unwrap()),
+            Settings::default(),
+        );
+        ws.open_paths(std::slice::from_ref(&path));
+        assert_eq!(ws.active_tab().unwrap().invalid_sequences, 1);
+        type_text(&mut ws, "draft");
+        ws.flush_journal();
+    }
+    let mut script = Script::default();
+    let mut ws = Workspace::new(
+        Some(RecoveryStore::open(data.path()).unwrap()),
+        Settings::default(),
+    );
+    ws.answer(Answer::Restore, &mut script);
+    let tab = ws.active_tab().unwrap();
+    assert_eq!(tab.invalid_sequences, 1);
+    assert_eq!(tab.first_invalid_offset, Some(6));
+    ws.save_active(false, &mut script);
+    assert!(matches!(
+        ws.current_prompt(),
+        Some(Prompt::LossySave { .. })
+    ));
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
 fn recovered_file_changed_on_disk_since_crash_is_flagged() {
     let data = TempDir::new("recovery-changed");
     let docs = TempDir::new("recovery-changed-docs");
