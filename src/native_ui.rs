@@ -101,6 +101,72 @@ pub struct NoteStrikeApp {
 
 const BASE_FONT_SIZE: f32 = 14.0;
 
+/// Map the persisted theme setting to egui's preference. `System` lets egui
+/// follow the operating system's light/dark setting (reported by winit) and
+/// falls back to egui's default when the OS does not report one.
+pub fn theme_preference(choice: ThemeChoice) -> egui::ThemePreference {
+    match choice {
+        ThemeChoice::System => egui::ThemePreference::System,
+        ThemeChoice::Light => egui::ThemePreference::Light,
+        ThemeChoice::Dark => egui::ThemePreference::Dark,
+    }
+}
+
+/// Colours that NoteStrike sets on top of egui's light and dark visuals.
+/// Every text/background pair is checked against WCAG AA in the tests below.
+pub mod palette {
+    use eframe::egui::{Color32, Theme};
+
+    pub struct Palette {
+        pub panel: Color32,
+        pub editor: Color32,
+        /// Editor text override (`None` keeps egui's text colour).
+        pub editor_text: Option<Color32>,
+        pub weak_text: Color32,
+        pub warn_text: Color32,
+        pub error_text: Color32,
+        pub notice_bg: Color32,
+        pub notice_text: Color32,
+        pub warn_icon: Color32,
+        /// How strongly the accent tints the text selection.
+        pub selection_strength: f32,
+    }
+
+    pub const LIGHT: Palette = Palette {
+        panel: Color32::from_rgb(243, 243, 243),
+        editor: Color32::WHITE,
+        editor_text: None,
+        weak_text: Color32::from_rgb(0x5F, 0x5F, 0x5F),
+        warn_text: Color32::from_rgb(0x9A, 0x34, 0x12),
+        error_text: Color32::from_rgb(0xB9, 0x1C, 0x1C),
+        notice_bg: Color32::from_rgb(0xFF, 0xF4, 0xE5),
+        notice_text: Color32::from_rgb(0x1F, 0x1F, 0x1F),
+        warn_icon: Color32::from_rgb(0x92, 0x40, 0x0E),
+        selection_strength: 0.3,
+    };
+
+    pub const DARK: Palette = Palette {
+        panel: Color32::from_rgb(32, 32, 32),
+        editor: Color32::from_rgb(24, 24, 24),
+        editor_text: Some(Color32::from_rgb(0xD4, 0xD4, 0xD4)),
+        weak_text: Color32::from_rgb(0xA0, 0xA0, 0xA0),
+        warn_text: Color32::from_rgb(0xFB, 0xBF, 0x24),
+        error_text: Color32::from_rgb(0xF8, 0x71, 0x71),
+        notice_bg: Color32::from_rgb(0x2B, 0x24, 0x14),
+        notice_text: Color32::from_rgb(0xF0, 0xF0, 0xF0),
+        warn_icon: Color32::from_rgb(0xFA, 0xCC, 0x15),
+        selection_strength: 0.45,
+    };
+
+    pub fn for_theme(theme: Theme) -> &'static Palette {
+        for_dark(theme == Theme::Dark)
+    }
+
+    pub fn for_dark(dark: bool) -> &'static Palette {
+        if dark { &DARK } else { &LIGHT }
+    }
+}
+
 impl NoteStrikeApp {
     pub fn new(
         ws: Workspace,
@@ -170,15 +236,17 @@ impl NoteStrikeApp {
                 } else {
                     Color32::from_rgb(96, 165, 250)
                 };
-                style.visuals.selection.bg_fill = accent.gamma_multiply(0.45);
+                style.visuals.selection.bg_fill =
+                    accent.gamma_multiply(palette::for_theme(theme).selection_strength);
                 style.visuals.hyperlink_color = accent;
-                if theme == egui::Theme::Light {
-                    style.visuals.panel_fill = Color32::from_rgb(243, 243, 243);
-                    style.visuals.extreme_bg_color = Color32::WHITE;
-                } else {
-                    style.visuals.panel_fill = Color32::from_rgb(32, 32, 32);
-                    style.visuals.extreme_bg_color = Color32::from_rgb(24, 24, 24);
-                }
+                let p = palette::for_theme(theme);
+                style.visuals.panel_fill = p.panel;
+                style.visuals.extreme_bg_color = p.editor;
+                // egui's default weak and warning colours miss WCAG AA on
+                // these backgrounds; use the checked palette instead.
+                style.visuals.weak_text_color = Some(p.weak_text);
+                style.visuals.warn_fg_color = p.warn_text;
+                style.visuals.error_fg_color = p.error_text;
             });
         }
         self.logo = load_texture(ctx, "notestrike-logo", LOGO_PNG);
@@ -190,11 +258,7 @@ impl NoteStrikeApp {
             return;
         }
         self.applied_theme = Some(self.ws.settings.theme);
-        ctx.set_theme(match self.ws.settings.theme {
-            ThemeChoice::System => egui::ThemePreference::System,
-            ThemeChoice::Light => egui::ThemePreference::Light,
-            ThemeChoice::Dark => egui::ThemePreference::Dark,
-        });
+        ctx.set_theme(theme_preference(self.ws.settings.theme));
     }
 
     fn persist_settings(&mut self) {
@@ -479,17 +543,19 @@ impl NoteStrikeApp {
                     }
                 });
                 ui.checkbox(&mut self.ws.settings.status_bar, "Status bar");
-                ui.separator();
-                ui.label(RichText::new("Theme").small().weak());
-                for (choice, label) in [
-                    (ThemeChoice::System, "Use system setting"),
-                    (ThemeChoice::Light, "Light"),
-                    (ThemeChoice::Dark, "Dark"),
-                ] {
-                    if ui.radio(self.ws.settings.theme == choice, label).clicked() {
-                        self.ws.settings.theme = choice;
+                ui.menu_button("Theme", |ui| {
+                    for (choice, label) in [
+                        (ThemeChoice::System, "System (follow Windows)"),
+                        (ThemeChoice::Light, "Light"),
+                        (ThemeChoice::Dark, "Dark"),
+                    ] {
+                        if ui.radio(self.ws.settings.theme == choice, label).clicked() {
+                            // Applied on the next frame and saved to settings.json.
+                            self.ws.settings.theme = choice;
+                            ui.close();
+                        }
                     }
-                }
+                });
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("Keyboard shortcuts").clicked() {
@@ -719,15 +785,12 @@ impl NoteStrikeApp {
             return;
         };
         let id = tab.id;
-        let warn = if ui.visuals().dark_mode {
-            Color32::from_rgb(250, 204, 21)
-        } else {
-            Color32::from_rgb(146, 64, 14)
-        };
+        let p = palette::for_dark(ui.visuals().dark_mode);
+        let (warn, notice_text) = (p.warn_icon, p.notice_text);
         let mut action: Option<NoticeAction> = None;
         let notice = |ui: &mut egui::Ui, text: String| {
             ui.label(RichText::new("⚠").color(warn));
-            ui.label(text);
+            ui.label(RichText::new(text).color(notice_text));
         };
         match tab.external {
             ExternalState::ChangedOnDisk => {
@@ -833,7 +896,9 @@ impl NoteStrikeApp {
             scroll_now = true;
         }
 
-        let text_color = ui.visuals().text_color();
+        let text_color = palette::for_dark(ui.visuals().dark_mode)
+            .editor_text
+            .unwrap_or_else(|| ui.visuals().text_color());
         let mut layouter = |ui: &egui::Ui, buf: &dyn TextBuffer, wrap_width: f32| {
             let job = LayoutJob::simple(
                 buf.as_str().to_owned(),
@@ -1267,7 +1332,7 @@ impl eframe::App for NoteStrikeApp {
             egui::Panel::top("notestrike-notices")
                 .frame(
                     egui::Frame::NONE
-                        .fill(ui.visuals().faint_bg_color)
+                        .fill(palette::for_dark(ui.visuals().dark_mode).notice_bg)
                         .inner_margin(egui::Margin::symmetric(10, 6)),
                 )
                 .show(ui, |ui| self.notices(ui));
@@ -1383,7 +1448,9 @@ fn write_capture_png(path: &Path, screenshot: &egui::ColorImage) -> Result<(), S
     let [width, height] = screenshot.size;
     let mut pixels = Vec::with_capacity(width * height * 4);
     for color in &screenshot.pixels {
-        pixels.extend_from_slice(&color.to_array());
+        // The window is opaque; drop the alpha egui reports for translucent fills.
+        let [r, g, b, _] = color.to_array();
+        pixels.extend_from_slice(&[r, g, b, 255]);
     }
     let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
         .ok_or("Could not construct screenshot image")?;
@@ -1609,5 +1676,174 @@ mod tests {
         }
         assert!(app.ws.find_step(true));
         assert_eq!(app.ws.selection, (0, 5));
+    }
+
+    fn themed_frame(app: &mut NoteStrikeApp, ctx: &egui::Context, system: Option<egui::Theme>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            system_theme: system,
+            ..Default::default()
+        };
+        let mut eframe_frame = eframe::Frame::_new_kittest();
+        ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut eframe_frame))
+            .textures_delta
+            .clear();
+    }
+
+    #[test]
+    fn system_theme_follows_the_os_and_explicit_choices_override_it() {
+        let ctx = egui::Context::default();
+        let mut app = app_with(Scripted::default());
+        assert_eq!(
+            app.ws.settings.theme,
+            ThemeChoice::System,
+            "default is System"
+        );
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Dark));
+        assert_eq!(
+            ctx.theme(),
+            egui::Theme::Dark,
+            "System tracks an OS change live"
+        );
+        // When the OS reports nothing, egui's fallback (dark) is used.
+        themed_frame(&mut app, &ctx, None);
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+
+        app.ws.settings.theme = ThemeChoice::Light;
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Dark));
+        assert_eq!(
+            ctx.theme(),
+            egui::Theme::Light,
+            "explicit Light ignores a dark OS"
+        );
+        app.ws.settings.theme = ThemeChoice::Dark;
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_eq!(
+            ctx.theme(),
+            egui::Theme::Dark,
+            "switching applies on the next frame"
+        );
+        assert_eq!(
+            theme_preference(ThemeChoice::System),
+            egui::ThemePreference::System
+        );
+    }
+
+    #[test]
+    fn theme_choice_persists_across_restarts() {
+        let dir = std::env::temp_dir().join(format!(
+            "notestrike-theme-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let settings_path = dir.join("settings.json");
+        let ctx = egui::Context::default();
+        let mut app = NoteStrikeApp::new(
+            Workspace::new(None, Settings::default()),
+            Box::new(Scripted::default()),
+            Some(settings_path.clone()),
+        );
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        app.ws.settings.theme = ThemeChoice::Dark;
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_eq!(Settings::load(&settings_path).theme, ThemeChoice::Dark);
+
+        // "Restart": a new app and context built from the saved settings.
+        let ctx = egui::Context::default();
+        let mut restarted = NoteStrikeApp::new(
+            Workspace::new(None, Settings::load(&settings_path)),
+            Box::new(Scripted::default()),
+            Some(settings_path.clone()),
+        );
+        themed_frame(&mut restarted, &ctx, Some(egui::Theme::Light));
+        themed_frame(&mut restarted, &ctx, Some(egui::Theme::Light));
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+
+        restarted.ws.settings.theme = ThemeChoice::System;
+        themed_frame(&mut restarted, &ctx, Some(egui::Theme::Light));
+        assert_eq!(Settings::load(&settings_path).theme, ThemeChoice::System);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn luminance(c: Color32) -> f64 {
+        let lin = |v: u8| {
+            let s = f64::from(v) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// Composite a premultiplied, possibly translucent colour over an opaque one.
+    fn over(top: Color32, bottom: Color32) -> Color32 {
+        let k = 1.0 - f32::from(top.a()) / 255.0;
+        let mix = |t: u8, b: u8| (f32::from(t) + f32::from(b) * k).round().min(255.0) as u8;
+        Color32::from_rgb(
+            mix(top.r(), bottom.r()),
+            mix(top.g(), bottom.g()),
+            mix(top.b(), bottom.b()),
+        )
+    }
+
+    #[test]
+    fn both_themes_meet_wcag_aa_contrast() {
+        let ctx = egui::Context::default();
+        let mut app = app_with(Scripted::default());
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let v = ctx.style_of(theme).visuals.clone();
+            let p = palette::for_theme(theme);
+            let text = v.text_color();
+            let editor_text = p.editor_text.unwrap_or(text);
+            let text_pairs = [
+                ("body text on panel", text, v.panel_fill),
+                ("body text in dialogs", text, v.window_fill),
+                ("editor text", editor_text, v.extreme_bg_color),
+                (
+                    "selected editor text",
+                    editor_text,
+                    over(v.selection.bg_fill, v.extreme_bg_color),
+                ),
+                ("weak text on panel", v.weak_text_color(), v.panel_fill),
+                ("weak text in dialogs", v.weak_text_color(), v.window_fill),
+                ("warning text on panel", v.warn_fg_color, v.panel_fill),
+                ("warning text in dialogs", v.warn_fg_color, v.window_fill),
+                ("error text in dialogs", v.error_fg_color, v.window_fill),
+                ("links in About", v.hyperlink_color, v.window_fill),
+                ("banner text", p.notice_text, p.notice_bg),
+                (
+                    "button text",
+                    v.widgets.inactive.fg_stroke.color,
+                    v.widgets.inactive.weak_bg_fill,
+                ),
+                (
+                    "hovered button text",
+                    v.widgets.hovered.fg_stroke.color,
+                    v.widgets.hovered.weak_bg_fill,
+                ),
+            ];
+            for (what, fg, bg) in text_pairs {
+                let ratio = contrast(fg, bg);
+                assert!(ratio >= 4.5, "{theme:?}: {what} contrast {ratio:.2} < 4.5");
+            }
+            let ui_pairs = [("banner warning icon", p.warn_icon, p.notice_bg)];
+            for (what, fg, bg) in ui_pairs {
+                let ratio = contrast(fg, bg);
+                assert!(ratio >= 3.0, "{theme:?}: {what} contrast {ratio:.2} < 3");
+            }
+        }
     }
 }
