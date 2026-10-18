@@ -525,3 +525,42 @@ fn settings_round_trip_and_fall_back_to_defaults() {
     assert_eq!(odd.theme, ThemeChoice::System);
     assert_eq!(odd.zoom_percent, Settings::ZOOM_MAX);
 }
+
+#[test]
+fn new_tabs_use_the_platform_line_ending_and_files_keep_theirs() {
+    let expected = if cfg!(windows) {
+        LineEnding::CrLf
+    } else {
+        LineEnding::Lf
+    };
+    assert_eq!(LineEnding::platform_default(), expected);
+    let dir = TempDir::new("ws-platform-eol");
+    let mut ws = ws();
+    let mut script = Script::default();
+    ws.new_tab();
+    let id = ws.active_tab().unwrap().id;
+    assert_eq!(ws.tab(id).unwrap().eol, expected);
+
+    // An existing file keeps its own convention on every OS.
+    for (name, bytes, eol) in [
+        ("crlf.txt", &b"a\r\nb\r\n"[..], LineEnding::CrLf),
+        ("lf.txt", &b"a\nb\n"[..], LineEnding::Lf),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, bytes).unwrap();
+        ws.open_paths(std::slice::from_ref(&path));
+        let id = ws.active_tab().unwrap().id;
+        assert_eq!(ws.tab(id).unwrap().eol, eol, "{name}");
+        ws.active_tab_mut().unwrap().text.push_str("c\n");
+        ws.text_edited(id);
+        ws.save_tab(id, &mut script);
+        let saved = fs::read(&path).unwrap();
+        let mut want = bytes.to_vec();
+        want.extend_from_slice(if eol == LineEnding::CrLf {
+            b"c\r\n"
+        } else {
+            b"c\n"
+        });
+        assert_eq!(saved, want, "{name}");
+    }
+}
