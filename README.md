@@ -145,7 +145,7 @@ cargo clippy --locked --no-default-features --all-targets -- -D warnings
 cargo test --locked --all-features
 ```
 
-`.github/workflows/native-editor.yml` runs exactly these on Windows, Ubuntu and macOS, then builds release binaries and captures the real window with `scripts/ci_capture.py` (see [Platforms](#platforms)).
+The matrix version of `.github/workflows/native-editor.yml` runs exactly these on Windows, Ubuntu and macOS, then builds release binaries and captures the real window with `scripts/ci_capture.py`. See [Platforms](#platforms) for what has actually run so far.
 
 The tests (70 on Windows and 71 on Linux and macOS, where one more checks Unix permission bits; plus one helper that a test runs as a child process) create their own files in the system temp folder and never touch user documents. They cover:
 
@@ -166,9 +166,11 @@ A platform is listed as **supported** only after CI has built and tested it ther
 
 | Platform | Status | Evidence |
 |---|---|---|
-| Windows 11 (x64) | Hands-on tested; CI pending | Local `cargo test` and a real-window capture |
-| Linux (Ubuntu, x64) | Builds in CI, not hands-on tested (pending first run) | |
-| macOS (Apple silicon) | Builds in CI, not hands-on tested (pending first run) | |
+| Windows (x64) | **Supported.** Built and tested in CI; hands-on tested on Windows 11 | [CI run 39163714508](https://github.com/Gerbzz/NoteStrike/actions/runs/39163714508) on `windows-latest`, rustc 1.99.1: fmt check, `cargo test` with the GUI feature (70 passed, 0 failed), debug build of both binaries |
+| Linux (Ubuntu, x64) | **Supported (CI only).** Built and tested in CI, not hands-on tested | [CI run 39163714508](https://github.com/Gerbzz/NoteStrike/actions/runs/39163714508) on `ubuntu-latest`, rustc 1.99.1: `cargo test` with the GUI feature (71 passed, 0 failed), debug build, and a 960x640 capture of the real window under xvfb |
+| macOS (Apple silicon) | **Not verified yet.** Not built or tested anywhere so far | The macOS CI job is in the matrix workflow, which has not been pushed yet (see below) |
+
+That run used the older two-job workflow, which has no clippy step, no release build and no macOS job. The matrix workflow in `.github/workflows/native-editor.yml` (windows-latest, ubuntu-latest and macos-latest, with fmt, clippy `-D warnings`, `cargo test --locked --all-features`, release builds, window captures, and artifacts) is ready. It is not yet on GitHub because the push needs a token with the `workflow` scope. This table gets updated when it runs.
 
 ## Limitations
 
