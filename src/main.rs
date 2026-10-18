@@ -3,6 +3,8 @@
 //! Usage: `notestrike [FILE ...]` opens each file in a tab.
 //! `notestrike --capture OUT.png [WIDTH HEIGHT] [FILE ...]` renders the real
 //! window once, writes it to OUT.png, and exits (documentation screenshots).
+//! In capture mode `--find TEXT REPLACEMENT` or `--about` (after the size)
+//! opens the find/replace bar or the About dialog first.
 
 // No console window for the release build on Windows.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -37,6 +39,20 @@ fn main() -> ExitCode {
             args.drain(..2);
         }
     }
+    // Capture-only scene setup, so documentation screenshots can show the
+    // find/replace bar or the About dialog of the real window:
+    // `--find TEXT REPLACEMENT` or `--about`, right after the size.
+    let mut find: Option<(String, String)> = None;
+    let mut about = false;
+    if capture.is_some() {
+        if args.first().is_some_and(|a| a == "--find") && args.len() >= 3 {
+            find = Some((args[1].clone(), args[2].clone()));
+            args.drain(..3);
+        } else if args.first().is_some_and(|a| a == "--about") {
+            about = true;
+            args.drain(..1);
+        }
+    }
     let files: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
 
     let data_dir = recovery::data_dir();
@@ -50,6 +66,16 @@ fn main() -> ExitCode {
         .unwrap_or_default();
     let mut ws = Workspace::new(recovery, settings);
     ws.open_paths(&files);
+    if let Some((needle, replacement)) = find {
+        ws.find.needle = needle;
+        ws.find.replacement = replacement;
+        ws.show_find(true);
+        ws.find.focus_request = false;
+        ws.find_step(true);
+    }
+    if about {
+        ws.prompts.push_back(notestrike::workspace::Prompt::About);
+    }
 
     let mut app = NoteStrikeApp::new(ws, Box::new(NativeDialogs), settings_path);
     let capture_result = capture.map(|path| app.capture_once(path));

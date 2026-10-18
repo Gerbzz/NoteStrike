@@ -716,7 +716,6 @@ impl NoteStrikeApp {
             if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                 let backwards = ui.input(|i| i.modifiers.shift);
                 self.ws.find_step(!backwards);
-                response.request_focus();
                 self.scroll_to_selection = true;
             }
             if ui
@@ -886,6 +885,9 @@ impl NoteStrikeApp {
         if let Some((target, range)) = self.ws.selection_request.take()
             && target == tab_id
         {
+            // egui collapses the selection of an unfocused TextEdit, so focus
+            // the editor first; the match is then shown selected.
+            ctx.memory_mut(|m| m.request_focus(id));
             let mut state = TextEditState::load(&ctx, id).unwrap_or_default();
             state.cursor.set_char_range(Some(CCursorRange::two(
                 CCursor::new(range.start),
@@ -1162,7 +1164,20 @@ impl NoteStrikeApp {
                         ui.add_space(8.0);
                         ui.label(RichText::new("Part of the PWDS Strike suite by").weak());
                         if let Some(logo) = &self.pwds_logo {
-                            ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(120.0, 52.0)).alt_text("ProWebDevSolutions logo"));
+                            // The official PWDS mark is black; in dark mode it sits on a
+                            // light plate so it stays visible.
+                            let plate = if ui.visuals().dark_mode {
+                                Color32::from_rgb(243, 243, 243)
+                            } else {
+                                Color32::TRANSPARENT
+                            };
+                            let (rect, response) =
+                                ui.allocate_exact_size(egui::vec2(140.0, 60.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 6.0, plate);
+                            egui::Image::new(logo).paint_at(ui, rect.shrink2(egui::vec2(10.0, 4.0)));
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Image, true, "ProWebDevSolutions logo")
+                            });
                         }
                         ui.hyperlink_to("ProWebDevSolutions", "https://prowebdevsolutions.com");
                         ui.add_space(8.0);
@@ -1845,5 +1860,26 @@ mod tests {
                 assert!(ratio >= 3.0, "{theme:?}: {what} contrast {ratio:.2} < 3");
             }
         }
+    }
+
+    #[test]
+    fn found_match_stays_selected_in_the_editor() {
+        let mut app = app_with(Scripted::default());
+        let ctx = egui::Context::default();
+        app.ws.active_tab_mut().unwrap().text = "one two three two".into();
+        frame(&mut app, &ctx, vec![], false);
+        app.ws.find.needle = "two".into();
+        assert!(app.ws.find_step(true));
+        frame(&mut app, &ctx, vec![], false);
+        frame(&mut app, &ctx, vec![], false);
+        let id = NoteStrikeApp::editor_id(app.ws.active_tab().unwrap().id);
+        let range = TextEditState::load(&ctx, id)
+            .unwrap()
+            .cursor
+            .char_range()
+            .unwrap();
+        let (a, b) = (range.primary.index, range.secondary.index);
+        assert_eq!((usize::from(a.min(b)), usize::from(a.max(b))), (4, 7));
+        assert_eq!(app.ws.selection, (4, 7));
     }
 }
