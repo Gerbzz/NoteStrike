@@ -1,7 +1,8 @@
 [package]
 name = "notestrike"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+description = "NoteStrike: a lightweight plain-text editor (Notepad replacement) from the PWDS Strike suite"
 
 [dependencies]
 same-file = "=1.0.6"
@@ -10,12 +11,21 @@ sha2 = "0.11"
 serde_json = "1"
 eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "glow", "accesskit", "wayland", "x11"], optional = true }
 image = { version = "0.25.10", default-features = false, features = ["png"], optional = true }
+rfd = { version = "=0.17.2", optional = true }
 
 [features]
-native-ui = ["dep:eframe", "dep:image"]
+default = ["native-ui"]
+native-ui = ["dep:eframe", "dep:image", "dep:rfd"]
 
+# The desktop editor. Built by default; `--no-default-features` builds only the
+# library and the `notestrike-cli` helper.
 [[bin]]
-name = "notestrike-native"
-path = "src/bin/notestrike-native.rs"
+name = "notestrike"
+path = "src/main.rs"
 required-features = ["native-ui"]
 
+# Command-line helper: inspect a file's encoding and line endings, or list and
+# import a legacy NoteStrike notebook as plain files. No GUI dependency.
+[[bin]]
+name = "notestrike-cli"
+path = "src/bin/notestrike-cli.rs"

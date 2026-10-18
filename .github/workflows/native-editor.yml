@@ -19,23 +19,54 @@ jobs:
       - name: Tests
         run: cargo test --locked --features native-ui -j 2
       - name: Native editor build
-        run: cargo build --locked --features native-ui --bin notestrike-native --bin notestrike -j 2
-  linux-visual:
+        run: cargo build --locked --features native-ui --bin notestrike --bin notestrike-cli -j 2
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Software OpenGL display
         run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libxkbcommon-dev libxkbcommon-x11-0
+      - name: Tests
+        run: cargo test --locked --features native-ui -j 2
       - name: Build editor and fixture CLI
-        run: cargo build --locked --features native-ui --bin notestrike-native --bin notestrike -j 2
+        run: cargo build --locked --features native-ui --bin notestrike --bin notestrike-cli -j 2
       - name: Capture populated editor
-        run: bash ./scripts/hosted-native-capture.sh
-      - name: Upload editor PNGs
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/notestrike-editor-visual"
+          mkdir -p "$root"
+          printf 'Project Hub\n\nReview priorities\nCapture decisions\nFollow up on open tasks\n' > "$root/fixture.txt"
+          export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe
+          export XDG_DATA_HOME="$RUNNER_TEMP/notestrike-data"
+          timeout 50s xvfb-run -a -s '-screen 0 1600x1000x24' \
+            ./target/debug/notestrike --capture "$root/editor.png" 960 640 "$root/fixture.txt"
+          python3 - "$root/editor.png" <<'PY'
+          import pathlib, struct, sys, zlib
+          data = pathlib.Path(sys.argv[1]).read_bytes()
+          if len(data) < 5000 or not data.startswith(b'\x89PNG\r\n\x1a\n'):
+              raise SystemExit('Native editor capture is incomplete')
+          width, height = struct.unpack('>II', data[16:24])
+          if width < 960 or height < 640:
+              raise SystemExit(f'Unexpected editor dimensions: {width}x{height}')
+          offset, pixels = 8, bytearray()
+          while offset < len(data):
+              length = struct.unpack('>I', data[offset:offset + 4])[0]
+              kind = data[offset + 4:offset + 8]
+              if kind == b'IDAT':
+                  pixels.extend(data[offset + 8:offset + 8 + length])
+              offset += length + 12
+          if len(set(zlib.decompress(pixels))) < 24:
+              raise SystemExit('Native editor capture lacks visible content')
+          print(f'Captured populated editor: {width}x{height}, {len(data)} bytes')
+          PY
+      - name: Upload editor PNG
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: notestrike-editor-visual
-          path: ${{ runner.temp }}/notestrike-editor-visual/*.png
+          path: ${{ runner.temp }}/notestrike-editor-visual/editor.png
           if-no-files-found: ignore
           retention-days: 1
+

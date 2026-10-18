@@ -1,82 +1,134 @@
-//! Native editor adapter for the local notebook core.
+//! egui/eframe front end. All editor behaviour lives in [`crate::workspace`];
+//! this module draws it: menu bar, tab strip, find/replace bar, notices, the
+//! text area, status bar, and modal prompts.
 
 use std::fs::OpenOptions;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use eframe::egui;
-use uuid::Uuid;
+use eframe::egui::{
+    self, Align, Color32, FontId, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextBuffer,
+    ViewportCommand,
+};
+use egui::text::{CCursor, CCursorRange, LayoutJob};
+use egui::text_edit::TextEditState;
 
-use crate::Notebook;
+use crate::document::human_size;
+use crate::encoding::TextEncoding;
+use crate::eol::LineEnding;
+use crate::search;
+use crate::workspace::{
+    Answer, ExternalState, FileDialogs, Prompt, Settings, ThemeChoice, Workspace,
+};
 
-pub struct NativeEditor {
-    root: PathBuf,
-    notebook: Notebook,
-    selected: Option<Uuid>,
-    pending_selection: Option<Uuid>,
-    search: String,
-    body_draft: String,
-    rename_draft: String,
-    dirty: bool,
-    preview: bool,
-    styled: bool,
-    status: String,
-    capture: Option<CaptureOnce>,
+pub const APP_NAME: &str = "NoteStrike";
+pub const LOGO_PNG: &[u8] = include_bytes!("../assets/branding/NoteStrike.png");
+pub const PWDS_LOGO_PNG: &[u8] = include_bytes!("../assets/branding/PWDS-logo.png");
+
+/// Native file dialogs (Windows common item dialogs via `rfd`).
+pub struct NativeDialogs;
+
+impl FileDialogs for NativeDialogs {
+    fn open_files(&mut self) -> Option<Vec<PathBuf>> {
+        rfd::FileDialog::new()
+            .set_title("Open")
+            .add_filter(
+                "Text documents",
+                &["txt", "md", "log", "ini", "csv", "json", "xml"],
+            )
+            .add_filter("All files", &["*"])
+            .pick_files()
+    }
+
+    fn save_file(&mut self, suggested_name: &str, directory: Option<&Path>) -> Option<PathBuf> {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Save As")
+            .set_file_name(suggested_name)
+            .add_filter("Text documents", &["txt"])
+            .add_filter("All files", &["*"]);
+        if let Some(dir) = directory {
+            dialog = dialog.set_directory(dir);
+        }
+        dialog.save_file()
+    }
+
+    fn pick_folder(&mut self, title: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new().set_title(title).pick_folder()
+    }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoticeAction {
+    Reload(Option<TextEncoding>),
+    KeepMine,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClipboardOp {
+    Cut,
+    Copy,
+    Paste,
+}
+
+/// One-shot capture of the rendered window (for documentation screenshots
+/// produced by the real app, not mockups).
 struct CaptureOnce {
     path: PathBuf,
     outcome: Arc<Mutex<Option<Result<(), String>>>>,
     started: Instant,
     settle_frames: u8,
     requested: bool,
-    scroll_to_end: bool,
 }
 
-impl NativeEditor {
-    pub fn new(root: PathBuf, notebook: Notebook) -> Self {
-        let warning_count = notebook.warnings().len();
-        let selected = notebook.list().first().map(|note| note.id);
-        let (body_draft, rename_draft) = selected
-            .and_then(|id| notebook.get(id))
-            .map(|note| (note.body.clone(), note.title.clone()))
-            .unwrap_or_default();
+pub struct NoteStrikeApp {
+    pub ws: Workspace,
+    dialogs: Box<dyn FileDialogs>,
+    settings_path: Option<PathBuf>,
+    saved_settings: Settings,
+    applied_theme: Option<ThemeChoice>,
+    setup_done: bool,
+    logo: Option<egui::TextureHandle>,
+    pwds_logo: Option<egui::TextureHandle>,
+    goto_input: String,
+    clipboard_request: Option<ClipboardOp>,
+    focus_editor: bool,
+    scroll_to_selection: bool,
+    prompt_signature: Option<(usize, std::mem::Discriminant<Prompt>)>,
+    capture: Option<CaptureOnce>,
+    closing: bool,
+}
+
+const BASE_FONT_SIZE: f32 = 14.0;
+
+impl NoteStrikeApp {
+    pub fn new(
+        ws: Workspace,
+        dialogs: Box<dyn FileDialogs>,
+        settings_path: Option<PathBuf>,
+    ) -> Self {
+        let saved_settings = ws.settings.clone();
         Self {
-            root,
-            notebook,
-            selected,
-            pending_selection: None,
-            search: String::new(),
-            body_draft,
-            rename_draft,
-            dirty: false,
-            preview: false,
-            styled: false,
-            status: if warning_count == 0 {
-                "Ready".into()
-            } else {
-                format!("{warning_count} note file(s) need repair; valid notes remain available.")
-            },
+            ws,
+            dialogs,
+            settings_path,
+            saved_settings,
+            applied_theme: None,
+            setup_done: false,
+            logo: None,
+            pwds_logo: None,
+            goto_input: String::new(),
+            clipboard_request: None,
+            focus_editor: true,
+            scroll_to_selection: false,
+            prompt_signature: None,
             capture: None,
+            closing: false,
         }
     }
 
-    /// Capture one fully painted editor frame, then close the capture window.
+    /// Capture one fully painted frame to `path`, then close the window.
     pub fn capture_once(&mut self, path: PathBuf) -> Arc<Mutex<Option<Result<(), String>>>> {
-        self.capture_with_scroll(path, false)
-    }
-
-    /// Capture a fully painted frame with the source editor scrolled to its end.
-    pub fn capture_once_at_end(&mut self, path: PathBuf) -> Arc<Mutex<Option<Result<(), String>>>> {
-        self.capture_with_scroll(path, true)
-    }
-
-    fn capture_with_scroll(
-        &mut self,
-        path: PathBuf,
-        scroll_to_end: bool,
-    ) -> Arc<Mutex<Option<Result<(), String>>>> {
         let outcome = Arc::new(Mutex::new(None));
         self.capture = Some(CaptureOnce {
             path,
@@ -84,53 +136,1015 @@ impl NativeEditor {
             started: Instant::now(),
             settle_frames: 0,
             requested: false,
-            scroll_to_end,
         });
         outcome
     }
 
-    fn write_capture_png(
-        path: &std::path::Path,
-        screenshot: &egui::ColorImage,
-    ) -> Result<(), String> {
-        let [width, height] = screenshot.size;
-        let bytes = width
-            .checked_mul(height)
-            .and_then(|pixels| pixels.checked_mul(4))
-            .ok_or("Screenshot dimensions overflow")?;
-        let mut pixels = Vec::with_capacity(bytes);
-        for color in &screenshot.pixels {
-            pixels.extend_from_slice(&color.to_array());
+    fn setup(&mut self, ctx: &egui::Context) {
+        if self.setup_done {
+            return;
         }
-        if pixels.len() != bytes {
-            return Err("Screenshot pixel count does not match its dimensions".into());
+        self.setup_done = true;
+        install_system_fonts(ctx);
+        // Ctrl +/- zoom the text, not the whole interface.
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            ctx.style_mut_of(theme, |style| {
+                style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+                style.spacing.button_padding = egui::vec2(8.0, 4.0);
+                style.spacing.menu_margin = egui::Margin::same(6);
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Body, FontId::proportional(14.0));
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Button, FontId::proportional(14.0));
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Small, FontId::proportional(12.0));
+                style
+                    .text_styles
+                    .insert(egui::TextStyle::Heading, FontId::proportional(20.0));
+                let accent = if theme == egui::Theme::Light {
+                    Color32::from_rgb(0, 95, 184)
+                } else {
+                    Color32::from_rgb(96, 165, 250)
+                };
+                style.visuals.selection.bg_fill = accent.gamma_multiply(0.45);
+                style.visuals.hyperlink_color = accent;
+                if theme == egui::Theme::Light {
+                    style.visuals.panel_fill = Color32::from_rgb(243, 243, 243);
+                    style.visuals.extreme_bg_color = Color32::WHITE;
+                } else {
+                    style.visuals.panel_fill = Color32::from_rgb(32, 32, 32);
+                    style.visuals.extreme_bg_color = Color32::from_rgb(24, 24, 24);
+                }
+            });
         }
-        let width = u32::try_from(width).map_err(|_| "Screenshot width exceeds PNG limits")?;
-        let height = u32::try_from(height).map_err(|_| "Screenshot height exceeds PNG limits")?;
-        let image = image::RgbaImage::from_raw(width, height, pixels)
-            .ok_or("Could not construct screenshot image")?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map_err(|error| format!("Create screenshot {}: {error}", path.display()))?;
-        image::DynamicImage::ImageRgba8(image)
-            .write_to(&mut file, image::ImageFormat::Png)
-            .map_err(|error| format!("Encode screenshot: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("Sync screenshot: {error}"))?;
-        Ok(())
+        self.logo = load_texture(ctx, "notestrike-logo", LOGO_PNG);
+        self.pwds_logo = load_texture(ctx, "pwds-logo", PWDS_LOGO_PNG);
     }
 
-    fn finish_capture(&mut self, ctx: &egui::Context, result: Result<(), String>) {
-        if let Some(capture) = self.capture.take() {
-            *capture.outcome.lock().unwrap() = Some(result);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    fn apply_theme(&mut self, ctx: &egui::Context) {
+        if self.applied_theme == Some(self.ws.settings.theme) {
+            return;
+        }
+        self.applied_theme = Some(self.ws.settings.theme);
+        ctx.set_theme(match self.ws.settings.theme {
+            ThemeChoice::System => egui::ThemePreference::System,
+            ThemeChoice::Light => egui::ThemePreference::Light,
+            ThemeChoice::Dark => egui::ThemePreference::Dark,
+        });
+    }
+
+    fn persist_settings(&mut self) {
+        if self.ws.settings != self.saved_settings {
+            if let Some(path) = &self.settings_path {
+                let _ = self.ws.settings.save(path);
+            }
+            self.saved_settings = self.ws.settings.clone();
         }
     }
+
+    fn zoom(&mut self, delta: i32) {
+        let z = &mut self.ws.settings.zoom_percent;
+        *z = if delta == 0 {
+            100
+        } else {
+            (*z as i32 + delta).clamp(Settings::ZOOM_MIN as i32, Settings::ZOOM_MAX as i32) as u32
+        };
+    }
+
+    fn editor_id(tab_id: u64) -> egui::Id {
+        egui::Id::new(("notestrike-editor", tab_id))
+    }
+
+    fn undo_redo(&mut self, ctx: &egui::Context, redo: bool) {
+        let Some(tab) = self.ws.active_tab() else {
+            return;
+        };
+        let (tab_id, id) = (tab.id, Self::editor_id(tab.id));
+        let Some(mut state) = TextEditState::load(ctx, id) else {
+            return;
+        };
+        let mut undoer = state.undoer();
+        let current = (
+            state.cursor.char_range().unwrap_or_default(),
+            tab.text.clone(),
+        );
+        let restored = if redo {
+            undoer.redo(&current).cloned()
+        } else {
+            undoer.undo(&current).cloned()
+        };
+        if let Some((range, text)) = restored {
+            if let Some(tab) = self.ws.active_tab_mut() {
+                tab.text = text;
+            }
+            state.cursor.set_char_range(Some(range));
+            self.ws.text_edited(tab_id);
+        }
+        state.set_undoer(undoer);
+        state.store(ctx, id);
+        self.focus_editor = true;
+    }
+
+    // ----- keyboard ------------------------------------------------------
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.ws.current_prompt().is_some() {
+            return;
+        }
+        let cmd = Modifiers::COMMAND;
+        let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
+        let pressed = |m: Modifiers, k: Key| {
+            ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)))
+        };
+        // Most specific first (Ctrl+Shift+S before Ctrl+S).
+        if pressed(cmd_shift, Key::S) {
+            self.ws.save_active(true, self.dialogs.as_mut());
+        } else if pressed(cmd, Key::S) {
+            self.ws.save_active(false, self.dialogs.as_mut());
+        }
+        if pressed(cmd, Key::N) || pressed(cmd, Key::T) {
+            self.ws.new_tab();
+            self.focus_editor = true;
+        }
+        if pressed(cmd, Key::O) {
+            self.ws.open_dialog(self.dialogs.as_mut());
+        }
+        if (pressed(cmd, Key::W) || pressed(cmd, Key::F4))
+            && let Some(id) = self.ws.active_tab().map(|t| t.id)
+        {
+            self.ws.request_close_tab(id);
+        }
+        if pressed(cmd, Key::F) {
+            self.ws.show_find(false);
+        }
+        if pressed(cmd, Key::H) {
+            self.ws.show_find(true);
+        }
+        if pressed(Modifiers::SHIFT, Key::F3) {
+            self.find_and_show(false);
+        } else if pressed(Modifiers::NONE, Key::F3) {
+            self.find_and_show(true);
+        }
+        if pressed(cmd, Key::G) {
+            self.goto_input.clear();
+            self.ws.prompts.push_back(Prompt::GoToLine);
+        }
+        if pressed(cmd_shift, Key::Tab) {
+            self.ws.next_tab(false);
+            self.focus_editor = true;
+        } else if pressed(cmd, Key::Tab) {
+            self.ws.next_tab(true);
+            self.focus_editor = true;
+        }
+        if pressed(cmd, Key::Plus) || pressed(cmd, Key::Equals) {
+            self.zoom(10);
+        }
+        if pressed(cmd, Key::Minus) {
+            self.zoom(-10);
+        }
+        if pressed(cmd, Key::Num0) {
+            self.zoom(0);
+        }
+        if self.ws.find.visible && ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.ws.find.visible = false;
+            self.focus_editor = true;
+        }
+    }
+
+    fn find_and_show(&mut self, forward: bool) {
+        if self.ws.find_step(forward) {
+            self.focus_editor = true;
+        }
+    }
+
+    // ----- menus ---------------------------------------------------------
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.add(egui::Button::new("New tab").shortcut_text("Ctrl+N")).clicked() {
+                    self.ws.new_tab();
+                    self.focus_editor = true;
+                }
+                if ui.add(egui::Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
+                    ui.close();
+                    self.ws.open_dialog(self.dialogs.as_mut());
+                }
+                ui.separator();
+                if ui.add(egui::Button::new("Save").shortcut_text("Ctrl+S")).clicked() {
+                    ui.close();
+                    self.ws.save_active(false, self.dialogs.as_mut());
+                }
+                if ui.add(egui::Button::new("Save as…").shortcut_text("Ctrl+Shift+S")).clicked() {
+                    ui.close();
+                    self.ws.save_active(true, self.dialogs.as_mut());
+                }
+                if ui.button("Save all").clicked() {
+                    ui.close();
+                    self.ws.save_all(self.dialogs.as_mut());
+                }
+                ui.separator();
+                let has_path = self.ws.active_tab().is_some_and(|t| t.path.is_some());
+                ui.add_enabled_ui(has_path, |ui| {
+                    if ui.button("Reload from disk").clicked() {
+                        ui.close();
+                        if let Some(id) = self.ws.active_tab().map(|t| t.id) {
+                            self.ws.request_reload(id, None);
+                        }
+                    }
+                    ui.menu_button("Reopen with encoding", |ui| {
+                        for enc in TextEncoding::ALL {
+                            if ui.button(enc.label()).clicked() {
+                                ui.close();
+                                if let Some(id) = self.ws.active_tab().map(|t| t.id) {
+                                    self.ws.request_reload(id, Some(enc));
+                                }
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+                if ui
+                    .button("Import NoteStrike 0.1 notebook…")
+                    .on_hover_text("Copy notes from an old NoteStrike notebook folder into plain .md files. The notebook is not changed.")
+                    .clicked()
+                {
+                    ui.close();
+                    self.ws.import_notebook(self.dialogs.as_mut());
+                }
+                ui.separator();
+                if ui.add(egui::Button::new("Close tab").shortcut_text("Ctrl+W")).clicked() {
+                    ui.close();
+                    if let Some(id) = self.ws.active_tab().map(|t| t.id) {
+                        self.ws.request_close_tab(id);
+                    }
+                }
+                if ui.add(egui::Button::new("Exit").shortcut_text("Alt+F4")).clicked() {
+                    ui.close();
+                    self.ws.request_quit();
+                }
+            });
+            ui.menu_button("Edit", |ui| {
+                if ui.add(egui::Button::new("Undo").shortcut_text("Ctrl+Z")).clicked() {
+                    ui.close();
+                    self.undo_redo(ui.ctx(), false);
+                }
+                if ui.add(egui::Button::new("Redo").shortcut_text("Ctrl+Y")).clicked() {
+                    ui.close();
+                    self.undo_redo(ui.ctx(), true);
+                }
+                ui.separator();
+                for (label, shortcut, op) in [
+                    ("Cut", "Ctrl+X", ClipboardOp::Cut),
+                    ("Copy", "Ctrl+C", ClipboardOp::Copy),
+                    ("Paste", "Ctrl+V", ClipboardOp::Paste),
+                ] {
+                    if ui.add(egui::Button::new(label).shortcut_text(shortcut)).clicked() {
+                        ui.close();
+                        self.clipboard_request = Some(op);
+                    }
+                }
+                if ui.add(egui::Button::new("Select all").shortcut_text("Ctrl+A")).clicked() {
+                    ui.close();
+                    if let Some(tab) = self.ws.active_tab() {
+                        let end = tab.text.chars().count();
+                        self.ws.selection_request = Some((tab.id, 0..end));
+                    }
+                }
+                ui.separator();
+                if ui.add(egui::Button::new("Find…").shortcut_text("Ctrl+F")).clicked() {
+                    ui.close();
+                    self.ws.show_find(false);
+                }
+                if ui.add(egui::Button::new("Find next").shortcut_text("F3")).clicked() {
+                    ui.close();
+                    self.find_and_show(true);
+                }
+                if ui.add(egui::Button::new("Find previous").shortcut_text("Shift+F3")).clicked() {
+                    ui.close();
+                    self.find_and_show(false);
+                }
+                if ui.add(egui::Button::new("Replace…").shortcut_text("Ctrl+H")).clicked() {
+                    ui.close();
+                    self.ws.show_find(true);
+                }
+                if ui.add(egui::Button::new("Go to line…").shortcut_text("Ctrl+G")).clicked() {
+                    ui.close();
+                    self.goto_input.clear();
+                    self.ws.prompts.push_back(Prompt::GoToLine);
+                }
+            });
+            ui.menu_button("Format", |ui| {
+                ui.checkbox(&mut self.ws.settings.word_wrap, "Word wrap");
+                ui.separator();
+                let Some(tab_id) = self.ws.active_tab().map(|t| t.id) else {
+                    return;
+                };
+                let (current_eol, current_enc) = self
+                    .ws
+                    .active_tab()
+                    .map(|t| (t.eol, t.encoding))
+                    .unwrap_or((LineEnding::CrLf, TextEncoding::Utf8));
+                ui.menu_button("Line endings", |ui| {
+                    for eol in LineEnding::ALL {
+                        if ui.radio(current_eol == eol, eol.label()).clicked() {
+                            ui.close();
+                            self.ws.set_eol(tab_id, eol);
+                        }
+                    }
+                });
+                ui.menu_button("Save with encoding", |ui| {
+                    for enc in TextEncoding::ALL {
+                        if ui.radio(current_enc == enc, enc.label()).clicked() {
+                            ui.close();
+                            self.ws.set_encoding(tab_id, enc);
+                        }
+                    }
+                });
+            });
+            ui.menu_button("View", |ui| {
+                ui.menu_button("Zoom", |ui| {
+                    if ui.add(egui::Button::new("Zoom in").shortcut_text("Ctrl+Plus")).clicked() {
+                        self.zoom(10);
+                    }
+                    if ui.add(egui::Button::new("Zoom out").shortcut_text("Ctrl+Minus")).clicked() {
+                        self.zoom(-10);
+                    }
+                    if ui.add(egui::Button::new("Restore default zoom").shortcut_text("Ctrl+0")).clicked() {
+                        self.zoom(0);
+                    }
+                });
+                ui.checkbox(&mut self.ws.settings.status_bar, "Status bar");
+                ui.separator();
+                ui.label(RichText::new("Theme").small().weak());
+                for (choice, label) in [
+                    (ThemeChoice::System, "Use system setting"),
+                    (ThemeChoice::Light, "Light"),
+                    (ThemeChoice::Dark, "Dark"),
+                ] {
+                    if ui.radio(self.ws.settings.theme == choice, label).clicked() {
+                        self.ws.settings.theme = choice;
+                    }
+                }
+            });
+            ui.menu_button("Help", |ui| {
+                if ui.button("Keyboard shortcuts").clicked() {
+                    ui.close();
+                    self.ws.prompts.push_back(Prompt::Message {
+                        title: "Keyboard shortcuts".into(),
+                        body: SHORTCUTS_HELP.into(),
+                    });
+                }
+                if ui.button("About NoteStrike").clicked() {
+                    ui.close();
+                    self.ws.prompts.push_back(Prompt::About);
+                }
+            });
+        });
+    }
+
+    // ----- tab strip -----------------------------------------------------
+
+    fn tab_strip(&mut self, ui: &mut egui::Ui) {
+        let mut activate = None;
+        let mut close = None;
+        let mut add = false;
+        egui::ScrollArea::horizontal()
+            .id_salt("notestrike-tabs")
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (index, tab) in self.ws.tabs.iter().enumerate() {
+                        let selected = index == self.ws.active;
+                        let title = tab.title();
+                        let dirty = tab.is_dirty();
+                        let fill = if selected {
+                            ui.visuals().extreme_bg_color
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+                        let frame = egui::Frame::NONE
+                            .fill(fill)
+                            .corner_radius(egui::CornerRadius {
+                                nw: 6,
+                                ne: 6,
+                                sw: 0,
+                                se: 0,
+                            })
+                            .inner_margin(egui::Margin::symmetric(8, 4));
+                        frame.show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let label = if dirty {
+                                    format!("● {title}")
+                                } else {
+                                    title.clone()
+                                };
+                                let text = if selected {
+                                    RichText::new(label).strong()
+                                } else {
+                                    RichText::new(label)
+                                };
+                                let response = ui
+                                    .add(
+                                        egui::Button::selectable(selected, text)
+                                            .frame_when_inactive(false),
+                                    )
+                                    .on_hover_text(match &tab.path {
+                                        Some(p) => p.display().to_string(),
+                                        None => "Not saved yet".into(),
+                                    });
+                                let accessible = format!(
+                                    "Tab {} of {}: {title}{}",
+                                    index + 1,
+                                    self.ws.tabs.len(),
+                                    if dirty { ", modified" } else { "" }
+                                );
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::SelectableLabel,
+                                        true,
+                                        selected,
+                                        &accessible,
+                                    )
+                                });
+                                if response.clicked() {
+                                    activate = Some(tab.id);
+                                }
+                                if response.middle_clicked() {
+                                    close = Some(tab.id);
+                                }
+                                let close_btn = ui
+                                    .add(
+                                        egui::Button::new(RichText::new("×").size(15.0))
+                                            .frame_when_inactive(false)
+                                            .small(),
+                                    )
+                                    .on_hover_text("Close tab (Ctrl+W)");
+                                let close_name = format!("Close {title}");
+                                close_btn.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::WidgetType::Button,
+                                        true,
+                                        &close_name,
+                                    )
+                                });
+                                if close_btn.clicked() {
+                                    close = Some(tab.id);
+                                }
+                            });
+                        });
+                    }
+                    let plus = ui
+                        .add(
+                            egui::Button::new(RichText::new("+").size(16.0))
+                                .frame_when_inactive(false),
+                        )
+                        .on_hover_text("New tab (Ctrl+N)");
+                    plus.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "New tab")
+                    });
+                    if plus.clicked() {
+                        add = true;
+                    }
+                });
+            });
+        if let Some(id) = activate {
+            self.ws.activate(id);
+            self.focus_editor = true;
+        }
+        if let Some(id) = close {
+            self.ws.request_close_tab(id);
+        }
+        if add {
+            self.ws.new_tab();
+            self.focus_editor = true;
+        }
+    }
+
+    // ----- find bar ------------------------------------------------------
+
+    fn find_bar(&mut self, ui: &mut egui::Ui) {
+        let narrow = ui.available_width() < 640.0;
+        let field_width = if narrow {
+            (ui.available_width() - 24.0).max(120.0)
+        } else {
+            220.0
+        };
+        ui.horizontal_wrapped(|ui| {
+            let find_label = ui.label("Find");
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.ws.find.needle)
+                    .desired_width(field_width)
+                    .hint_text("Find"),
+            );
+            let response = response.labelled_by(find_label.id);
+            if self.ws.find.focus_request {
+                response.request_focus();
+                self.ws.find.focus_request = false;
+            }
+            if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                let backwards = ui.input(|i| i.modifiers.shift);
+                self.ws.find_step(!backwards);
+                response.request_focus();
+                self.scroll_to_selection = true;
+            }
+            if ui
+                .button("↑")
+                .on_hover_text("Find previous (Shift+F3)")
+                .clicked()
+            {
+                self.ws.find_step(false);
+                self.scroll_to_selection = true;
+            }
+            if ui.button("↓").on_hover_text("Find next (F3)").clicked() {
+                self.ws.find_step(true);
+                self.scroll_to_selection = true;
+            }
+            ui.checkbox(&mut self.ws.find.options.match_case, "Match case");
+            ui.checkbox(&mut self.ws.find.options.whole_word, "Whole word");
+            ui.checkbox(&mut self.ws.find.options.wrap_around, "Wrap around");
+            if let Some(tab) = self.ws.active_tab()
+                && !self.ws.find.needle.is_empty()
+            {
+                let n =
+                    search::count_matches(&tab.text, &self.ws.find.needle, self.ws.find.options);
+                ui.label(
+                    RichText::new(format!("{n} match{}", if n == 1 { "" } else { "es" })).weak(),
+                );
+            }
+            if ui
+                .button(if self.ws.find.replace_visible {
+                    "Hide replace"
+                } else {
+                    "Replace…"
+                })
+                .clicked()
+            {
+                self.ws.find.replace_visible = !self.ws.find.replace_visible;
+            }
+            if ui.button("×").on_hover_text("Close (Esc)").clicked() {
+                self.ws.find.visible = false;
+                self.focus_editor = true;
+            }
+        });
+        if self.ws.find.replace_visible {
+            ui.horizontal_wrapped(|ui| {
+                let label = ui.label("Replace");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.ws.find.replacement)
+                        .desired_width(field_width)
+                        .hint_text("Replace with"),
+                )
+                .labelled_by(label.id);
+                if ui.button("Replace").clicked() {
+                    self.ws.replace_step();
+                    self.scroll_to_selection = true;
+                }
+                if ui.button("Replace all").clicked() {
+                    self.ws.replace_all();
+                }
+            });
+        }
+    }
+
+    // ----- notices -------------------------------------------------------
+
+    fn notices(&mut self, ui: &mut egui::Ui) {
+        let Some(tab) = self.ws.active_tab() else {
+            return;
+        };
+        let id = tab.id;
+        let warn = if ui.visuals().dark_mode {
+            Color32::from_rgb(250, 204, 21)
+        } else {
+            Color32::from_rgb(146, 64, 14)
+        };
+        let mut action: Option<NoticeAction> = None;
+        let notice = |ui: &mut egui::Ui, text: String| {
+            ui.label(RichText::new("⚠").color(warn));
+            ui.label(text);
+        };
+        match tab.external {
+            ExternalState::ChangedOnDisk => {
+                ui.horizontal_wrapped(|ui| {
+                    notice(ui, "This file was changed by another program.".into());
+                    if ui.button("Reload").clicked() {
+                        action = Some(NoticeAction::Reload(None));
+                    }
+                    if ui.button("Keep my version").clicked() {
+                        action = Some(NoticeAction::KeepMine);
+                    }
+                });
+            }
+            ExternalState::MissingOnDisk => {
+                ui.horizontal_wrapped(|ui| {
+                    notice(
+                        ui,
+                        "This file was deleted, renamed, or moved. Your text is still here.".into(),
+                    );
+                    if ui.button("Keep editing").clicked() {
+                        action = Some(NoticeAction::KeepMine);
+                    }
+                });
+            }
+            ExternalState::InSync => {}
+        }
+        if tab.invalid_sequences > 0 {
+            let enc = tab.encoding;
+            ui.horizontal_wrapped(|ui| {
+                notice(
+                    ui,
+                    format!(
+                        "{} byte sequence(s) could not be decoded as {} and are shown as \u{FFFD}{}. Saving would replace them permanently.",
+                        tab.invalid_sequences,
+                        enc.label(),
+                        tab.first_invalid_offset.map(|o| format!(" (first at byte {o})")).unwrap_or_default()
+                    ),
+                );
+                for alt in [TextEncoding::Windows1252, TextEncoding::Utf8, TextEncoding::Utf16Le] {
+                    if alt != enc && ui.button(format!("Reopen as {}", alt.label())).clicked() {
+                        action = Some(NoticeAction::Reload(Some(alt)));
+                    }
+                }
+            });
+        }
+        if tab.contains_nul {
+            ui.horizontal_wrapped(|ui| notice(ui, "This file contains NUL bytes and may be binary. Saving it as text can damage it.".into()));
+        }
+        if tab.read_only {
+            ui.horizontal_wrapped(|ui| {
+                notice(
+                    ui,
+                    "This file is read-only. Use Save As to keep your changes in a new file."
+                        .into(),
+                )
+            });
+        }
+        if let Some(counts) = tab.mixed_eol {
+            ui.horizontal_wrapped(|ui| {
+                notice(
+                    ui,
+                    format!(
+                        "Mixed line endings ({} CRLF, {} LF, {} CR). Saving will use {}.",
+                        counts.crlf,
+                        counts.lf,
+                        counts.cr,
+                        tab.eol.short()
+                    ),
+                );
+            });
+        }
+        match action {
+            Some(NoticeAction::Reload(encoding)) => self.ws.request_reload(id, encoding),
+            Some(NoticeAction::KeepMine) => self.ws.keep_my_version(id),
+            None => {}
+        }
+    }
+
+    // ----- editor --------------------------------------------------------
+
+    fn editor(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let font = FontId::monospace(BASE_FONT_SIZE * self.ws.settings.zoom_percent as f32 / 100.0);
+        let wrap = self.ws.settings.word_wrap;
+        let Some(index) = self.ws.tabs.get(self.ws.active).map(|_| self.ws.active) else {
+            return;
+        };
+        let tab_id = self.ws.tabs[index].id;
+        let title = self.ws.tabs[index].title();
+        let id = Self::editor_id(tab_id);
+
+        let mut scroll_now = std::mem::take(&mut self.scroll_to_selection);
+        if let Some((target, range)) = self.ws.selection_request.take()
+            && target == tab_id
+        {
+            let mut state = TextEditState::load(&ctx, id).unwrap_or_default();
+            state.cursor.set_char_range(Some(CCursorRange::two(
+                CCursor::new(range.start),
+                CCursor::new(range.end),
+            )));
+            state.store(&ctx, id);
+            self.focus_editor = true;
+            scroll_now = true;
+        }
+
+        let text_color = ui.visuals().text_color();
+        let mut layouter = |ui: &egui::Ui, buf: &dyn TextBuffer, wrap_width: f32| {
+            let job = LayoutJob::simple(
+                buf.as_str().to_owned(),
+                font.clone(),
+                text_color,
+                if wrap { wrap_width } else { f32::INFINITY },
+            );
+            ui.fonts_mut(|f| f.layout_job(job))
+        };
+
+        let row_height = font.size * 1.25;
+        let available = ui.available_size();
+        let rows = ((available.y / row_height).floor() as usize).max(1);
+        let scroll = if wrap {
+            egui::ScrollArea::vertical()
+        } else {
+            egui::ScrollArea::both()
+        };
+        let clipboard = self.clipboard_request.take();
+        let focus = std::mem::take(&mut self.focus_editor);
+        let tab = &mut self.ws.tabs[index];
+        let output = scroll
+            .id_salt(("notestrike-scroll", tab_id))
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let edit = egui::TextEdit::multiline(&mut tab.text)
+                    .id(id)
+                    .font(font.clone())
+                    .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 8)))
+                    .lock_focus(true)
+                    .desired_rows(rows)
+                    .desired_width(if wrap {
+                        ui.available_width()
+                    } else {
+                        f32::INFINITY
+                    })
+                    .min_size(available)
+                    .layouter(&mut layouter);
+                let output = edit.show(ui);
+                if scroll_now && let Some(range) = output.cursor_range {
+                    let rect = output
+                        .galley
+                        .pos_from_cursor(range.primary)
+                        .translate(output.galley_pos.to_vec2())
+                        .expand(row_height);
+                    ui.scroll_to_rect(rect, Some(Align::Center));
+                }
+                output
+            })
+            .inner;
+        let response = &output.response.response;
+        if focus || clipboard.is_some() {
+            response.request_focus();
+        }
+        if let Some(op) = clipboard {
+            ctx.send_viewport_cmd(match op {
+                ClipboardOp::Cut => ViewportCommand::RequestCut,
+                ClipboardOp::Copy => ViewportCommand::RequestCopy,
+                ClipboardOp::Paste => ViewportCommand::RequestPaste,
+            });
+        }
+        ctx.accesskit_node_builder(response.id, |node| {
+            node.set_label(format!("Text editor: {title}"));
+        });
+        if response.changed() {
+            self.ws.text_edited(tab_id);
+        }
+        if let Some(range) = output.cursor_range {
+            let (a, b) = (range.primary.index, range.secondary.index);
+            self.ws.selection = (a.min(b).into(), a.max(b).into());
+        }
+    }
+
+    // ----- status bar ----------------------------------------------------
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        let Some(tab) = self.ws.active_tab() else {
+            return;
+        };
+        let width = ui.available_width();
+        let (line, col) = search::line_col(&tab.text, self.ws.selection.1);
+        let chars = tab.text.chars().count();
+        let (tab_id, eol, enc) = (tab.id, tab.eol, tab.encoding);
+        let status = self.ws.status.clone();
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.menu_button(enc.label(), |ui| {
+                ui.label(RichText::new("Save with encoding").small().weak());
+                for candidate in TextEncoding::ALL {
+                    if ui.radio(candidate == enc, candidate.label()).clicked() {
+                        ui.close();
+                        self.ws.set_encoding(tab_id, candidate);
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Encoding used when saving. To decode the file differently, use File > Reopen with encoding.");
+            ui.separator();
+            ui.menu_button(eol.label(), |ui| {
+                for candidate in LineEnding::ALL {
+                    if ui.radio(candidate == eol, candidate.label()).clicked() {
+                        ui.close();
+                        self.ws.set_eol(tab_id, candidate);
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Line endings used when saving");
+            ui.separator();
+            if width > 560.0 {
+                ui.label(format!("{}%", self.ws.settings.zoom_percent))
+                    .on_hover_text("Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0)");
+                ui.separator();
+            }
+            if width > 700.0 {
+                ui.label(format!("{chars} characters"));
+                ui.separator();
+            }
+            ui.label(format!("Ln {line}, Col {col}"));
+            ui.separator();
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.add(egui::Label::new(RichText::new(status).small()).truncate());
+            });
+        });
+    }
+
+    // ----- prompts -------------------------------------------------------
+
+    fn prompts(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = self.ws.current_prompt().cloned() else {
+            self.prompt_signature = None;
+            return;
+        };
+        let signature = (self.ws.prompts.len(), std::mem::discriminant(&prompt));
+        let first_frame = self.prompt_signature != Some(signature);
+        self.prompt_signature = Some(signature);
+        let title_of = |ws: &Workspace, id: u64| ws.tab(id).map(|t| t.title()).unwrap_or_default();
+        let mut answer: Option<Answer> = None;
+        let modal = egui::Modal::new(egui::Id::new("notestrike-prompt")).show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            let buttons: Vec<(&str, Answer)>;
+            match &prompt {
+                Prompt::UnsavedTab { tab } => {
+                    ui.heading("Unsaved changes");
+                    ui.label(format!("Do you want to save changes to {}?", title_of(&self.ws, *tab)));
+                    buttons = vec![("Save", Answer::Save), ("Don't save", Answer::DontSave), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::UnsavedOnQuit { tabs } => {
+                    ui.heading("Unsaved changes");
+                    ui.label(format!("{} document(s) have unsaved changes:", tabs.len()));
+                    for id in tabs {
+                        ui.label(format!("  •  {}", title_of(&self.ws, *id)));
+                    }
+                    buttons = vec![("Save all", Answer::SaveAll), ("Don't save", Answer::DiscardAll), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::ChangedOnDisk { save } => {
+                    ui.heading("File changed on disk");
+                    ui.label(format!(
+                        "{} was changed or removed by another program after you opened it. Overwrite it with your version, save your version under a new name, or cancel.",
+                        title_of(&self.ws, save.tab)
+                    ));
+                    buttons = vec![("Overwrite", Answer::Overwrite), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::LossySave { save } => {
+                    let tab = self.ws.tab(save.tab);
+                    ui.heading("Undecodable bytes");
+                    ui.label(format!(
+                        "{} contains {} byte sequence(s) that could not be decoded as {}. They are shown as \u{FFFD}, and saving writes \u{FFFD} in their place permanently.\n\nTo keep the original bytes, cancel and use File > Reopen with encoding.",
+                        title_of(&self.ws, save.tab),
+                        tab.map_or(0, |t| t.invalid_sequences),
+                        tab.map_or("UTF-8", |t| t.encoding.label())
+                    ));
+                    buttons = vec![("Save anyway", Answer::SaveAnyway), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::Unrepresentable { details, .. } => {
+                    ui.heading("Characters cannot be saved");
+                    ui.label(format!("{details}. Nothing was written."));
+                    buttons = vec![("Save as UTF-8", Answer::UseUtf8), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::ReadOnly { save } => {
+                    ui.heading("Read-only file");
+                    ui.label(format!(
+                        "{} is read-only. Save your changes under a new name?",
+                        title_of(&self.ws, save.tab)
+                    ));
+                    buttons = vec![("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::LargeFile { path, size } => {
+                    ui.heading("Large file");
+                    ui.label(format!(
+                        "{} is {}. NoteStrike keeps the whole file in memory, so editing may be slow.",
+                        path.display(),
+                        human_size(*size)
+                    ));
+                    buttons = vec![("Open anyway", Answer::OpenAnyway), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::ConfirmReload { tab, encoding } => {
+                    ui.heading("Discard unsaved changes?");
+                    ui.label(format!(
+                        "Reloading {}{} discards your unsaved changes.",
+                        title_of(&self.ws, *tab),
+                        encoding.map(|e| format!(" as {}", e.label())).unwrap_or_default()
+                    ));
+                    buttons = vec![("Reload", Answer::Reload), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::Recovery { orphans } => {
+                    ui.heading("Recover unsaved work");
+                    ui.label("NoteStrike did not close normally last time. These documents can be recovered:");
+                    egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                        for orphan in orphans {
+                            let e = &orphan.entry;
+                            let kind = if e.text.is_some() { "unsaved changes" } else { "reopen" };
+                            let location = e.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not saved yet".into());
+                            ui.add(egui::Label::new(format!("  •  {} ({kind})", e.title)));
+                            ui.add(egui::Label::new(RichText::new(format!("      {location}")).small().weak()).truncate())
+                                .on_hover_text(&location);
+                        }
+                    });
+                    buttons = vec![("Restore", Answer::Restore), ("Discard…", Answer::Discard), ("Later", Answer::Later)];
+                }
+                Prompt::ConfirmDiscardRecovery { orphans } => {
+                    ui.heading("Discard recovered text?");
+                    ui.label(format!(
+                        "This permanently deletes NoteStrike's {} recovery cop{}. Your own files are not touched.",
+                        orphans.len(),
+                        if orphans.len() == 1 { "y" } else { "ies" }
+                    ));
+                    buttons = vec![("Discard", Answer::Discard), ("Back", Answer::Cancel)];
+                }
+                Prompt::GoToLine => {
+                    ui.heading("Go to line");
+                    let total = self.ws.active_tab().map_or(1, |t| search::line_count(&t.text));
+                    let label = ui.label(format!("Line number (1–{total}):"));
+                    let field = ui.add(egui::TextEdit::singleline(&mut self.goto_input).desired_width(160.0)).labelled_by(label.id);
+                    if first_frame {
+                        field.request_focus();
+                    }
+                    if self.ws.status.starts_with("The line number") {
+                        ui.label(RichText::new(&self.ws.status).color(ui.visuals().warn_fg_color));
+                    }
+                    let parsed = self.goto_input.trim().parse::<usize>();
+                    if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) && let Ok(n) = parsed {
+                        answer = Some(Answer::GoTo(n));
+                    }
+                    buttons = vec![("Go to", Answer::GoTo(parsed.unwrap_or(0))), ("Cancel", Answer::Cancel)];
+                }
+                Prompt::Message { title, body } => {
+                    ui.heading(title);
+                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                        ui.label(body);
+                    });
+                    buttons = vec![("OK", Answer::Ok)];
+                }
+                Prompt::About => {
+                    ui.vertical_centered(|ui| {
+                        if let Some(logo) = &self.logo {
+                            ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(96.0, 96.0)).alt_text("NoteStrike hedgehog logo"));
+                        }
+                        ui.heading(format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")));
+                        ui.label("A lightweight plain-text editor.");
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Part of the PWDS Strike suite by").weak());
+                        if let Some(logo) = &self.pwds_logo {
+                            ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(120.0, 52.0)).alt_text("ProWebDevSolutions logo"));
+                        }
+                        ui.hyperlink_to("ProWebDevSolutions", "https://prowebdevsolutions.com");
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Built with Rust, egui/eframe, and rfd (MIT / Apache-2.0).").small().weak());
+                    });
+                    buttons = vec![("OK", Answer::Ok)];
+                }
+            }
+            ui.add_space(12.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Right-to-left: show buttons in reverse so the first one is leftmost.
+                for (index, (label, value)) in buttons.iter().enumerate().rev() {
+                    let button = if index == 0 {
+                        egui::Button::new(RichText::new(*label).strong())
+                    } else {
+                        egui::Button::new(*label)
+                    };
+                    let response = ui.add(button.min_size(egui::vec2(88.0, 28.0)));
+                    if index == 0 && first_frame && !matches!(prompt, Prompt::GoToLine) {
+                        response.request_focus();
+                    }
+                    if response.clicked() {
+                        answer = Some(*value);
+                    }
+                }
+            });
+        });
+        if answer.is_none() && modal.should_close() {
+            answer = Some(match prompt {
+                Prompt::Message { .. } | Prompt::About => Answer::Ok,
+                Prompt::Recovery { .. } => Answer::Later,
+                _ => Answer::Cancel,
+            });
+        }
+        if let Some(answer) = answer {
+            if matches!(answer, Answer::GoTo(_)) {
+                self.scroll_to_selection = true;
+            }
+            self.ws.answer(answer, self.dialogs.as_mut());
+            self.focus_editor = self.ws.current_prompt().is_none();
+        }
+    }
+
+    // ----- capture -------------------------------------------------------
 
     fn capture_after_frame(&mut self, ctx: &egui::Context) {
-        let Some(capture) = self.capture.as_ref() else {
+        let Some(capture) = self.capture.as_mut() else {
             return;
         };
         if capture.started.elapsed() > Duration::from_secs(15) {
@@ -145,608 +1159,455 @@ impl NativeEditor {
                 })
             });
             if let Some(image) = image {
-                let result = Self::write_capture_png(&capture.path, &image);
+                let path = capture.path.clone();
+                let result = write_capture_png(&path, &image);
                 self.finish_capture(ctx, result);
             } else {
                 ctx.request_repaint();
             }
             return;
         }
-        let capture = self.capture.as_mut().unwrap();
-        if capture.settle_frames < 2 {
+        if capture.settle_frames < 4 {
             capture.settle_frames += 1;
         } else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            ctx.send_viewport_cmd(ViewportCommand::Screenshot(egui::UserData::default()));
             capture.requested = true;
         }
         ctx.request_repaint();
     }
 
-    fn select(&mut self, id: Uuid) {
-        if self.selected == Some(id) {
-            return;
-        }
-        if self.dirty {
-            self.pending_selection = Some(id);
-            self.status = "Save or discard your current edit before switching notes.".into();
-            return;
-        }
-        self.selected = Some(id);
-        if let Some(note) = self.notebook.get(id) {
-            self.body_draft = note.body.clone();
-            self.rename_draft = note.title.clone();
-            self.status = "Ready".into();
+    fn finish_capture(&mut self, ctx: &egui::Context, result: Result<(), String>) {
+        if let Some(capture) = self.capture.take() {
+            *capture.outcome.lock().unwrap() = Some(result);
+            self.ws.shutdown();
+            self.closing = true;
+            ctx.send_viewport_cmd(ViewportCommand::Close);
         }
     }
 
-    fn save(&mut self) {
-        let Some(id) = self.selected else { return };
-        match self.notebook.update(id, &self.body_draft) {
-            Ok(()) => {
-                self.dirty = false;
-                self.status = "Saved to the notebook.".into();
-                if let Some(next) = self.pending_selection.take() {
-                    self.select(next);
-                }
-            }
-            Err(error) => self.status = error,
-        }
-    }
-
-    fn discard(&mut self) {
-        if let Some(id) = self.selected
-            && let Some(note) = self.notebook.get(id)
-        {
-            self.body_draft = note.body.clone();
-            self.rename_draft = note.title.clone();
-        }
-        self.dirty = false;
-        self.status = "Unsaved edit discarded.".into();
-        if let Some(next) = self.pending_selection.take() {
-            self.select(next);
-        }
-    }
-
-    fn reload_disk(&mut self) {
-        match Notebook::open(&self.root) {
-            Ok(notebook) => {
-                let selected = self.selected.filter(|id| notebook.get(*id).is_some());
-                self.notebook = notebook;
-                self.selected = selected;
-                self.dirty = false;
-                self.pending_selection = None;
-                if let Some(id) = selected
-                    && let Some(note) = self.notebook.get(id)
-                {
-                    self.body_draft = note.body.clone();
-                    self.rename_draft = note.title.clone();
-                }
-                self.status = if self.notebook.warnings().is_empty() {
-                    "Reloaded from disk.".into()
-                } else {
-                    format!(
-                        "Reloaded; {} note file(s) need repair.",
-                        self.notebook.warnings().len()
-                    )
-                };
-            }
-            Err(error) => self.status = error,
-        }
-    }
-
-    fn create_copy(&mut self) {
-        let title = self
-            .selected
-            .and_then(|id| self.notebook.get(id))
-            .map(|note| format!("{} (local copy)", note.title))
-            .unwrap_or_else(|| "Recovered note".into());
-        match self.notebook.add(&title, &self.body_draft) {
-            Ok(note) => {
-                self.dirty = false;
-                self.selected = Some(note.id);
-                self.rename_draft = note.title;
-                self.pending_selection = None;
-                self.status = "Saved a separate copy; the disk version was kept.".into();
-            }
-            Err(error) => self.status = error,
-        }
-    }
-
-    fn create_note(&mut self) {
-        if self.dirty {
-            self.status = "Save or discard your current edit before creating a note.".into();
-            return;
-        }
-        match self.notebook.add("Untitled", "") {
-            Ok(note) => self.select(note.id),
-            Err(error) => self.status = error,
-        }
-    }
-
-    fn rename(&mut self) {
-        if self.dirty {
-            self.status = "Save the body before renaming this note.".into();
-            return;
-        }
-        let Some(id) = self.selected else { return };
-        match self.notebook.rename(id, &self.rename_draft) {
-            Ok(()) => self.status = "Title saved; ID links still point here.".into(),
-            Err(error) => self.status = error,
-        }
-    }
-
-    fn matching_notes(&self) -> Vec<(Uuid, String)> {
-        let notes = if self.search.trim().is_empty() {
-            self.notebook.list()
-        } else {
-            self.notebook.search(&self.search)
-        };
-        notes
-            .into_iter()
-            .map(|note| (note.id, note.title.clone()))
-            .collect()
-    }
-
-    fn backlink_notes(&self, id: Uuid) -> Vec<(Uuid, String)> {
-        let mut links: Vec<_> = self
-            .notebook
-            .backlinks(id)
-            .into_iter()
-            .filter_map(|source| {
-                self.notebook
-                    .get(source)
-                    .map(|note| (source, note.title.clone()))
-            })
-            .collect();
-        links.sort_by(|a, b| {
-            a.1.to_lowercase()
-                .cmp(&b.1.to_lowercase())
-                .then(a.0.cmp(&b.0))
-        });
-        links
-    }
-
-    fn note_list(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Notes");
-        ui.label(
-            egui::RichText::new(format!("{} in this notebook", self.notebook.list().len()))
-                .small()
-                .weak(),
-        );
-        ui.add_space(10.0);
-        ui.add_sized(
-            [ui.available_width(), 36.0],
-            egui::TextEdit::singleline(&mut self.search).hint_text("Search notes"),
-        );
-        ui.add_space(4.0);
-        if ui
-            .add_sized([ui.available_width(), 36.0], egui::Button::new("New note"))
-            .clicked()
-        {
-            self.create_note();
-        }
-        ui.add_space(12.0);
-        ui.separator();
-        let notes = self.matching_notes();
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if notes.is_empty() {
-                ui.add_space(12.0);
-                ui.label(if self.search.trim().is_empty() {
-                    "No notes yet. Create one to start your local notebook."
-                } else {
-                    "No matches. Try a shorter search or clear the field."
-                });
-            }
-            for (id, title) in notes {
-                if ui
-                    .selectable_label(self.selected == Some(id), title)
-                    .clicked()
-                {
-                    self.select(id);
-                }
-            }
-        });
-    }
-
-    fn context_rail(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Details");
-        if !self.notebook.warnings().is_empty() {
-            ui.colored_label(
-                egui::Color32::from_rgb(139, 77, 22),
-                "Unreadable note files",
-            );
-            for warning in self.notebook.warnings().iter().take(5) {
-                let name = warning
-                    .path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "?".into());
-                ui.label(format!("{}: {}", name, warning.reason));
-            }
-            ui.label(egui::RichText::new("Repair from a validated Markdown copy with `notestrike repair`; the original is backed up.").small());
-            ui.separator();
-        }
-        let Some(id) = self.selected else {
-            ui.label("Select a note to see its links.");
-            return;
-        };
-        ui.label("Title");
-        ui.add_sized(
-            [ui.available_width(), 34.0],
-            egui::TextEdit::singleline(&mut self.rename_draft),
-        );
-        if ui.button("Save title").clicked() {
-            self.rename();
-        }
-        ui.separator();
-        ui.strong("Backlinks");
-        let links = self.backlink_notes(id);
-        if links.is_empty() {
-            ui.label("No notes link here yet.");
-        }
-        for (source, title) in links {
-            if ui.button(title).clicked() {
-                self.select(source);
-            }
-        }
-        ui.separator();
-        ui.weak(format!("ID: {id}"));
-    }
-
-    fn source_editor(
-        &mut self,
-        ui: &mut egui::Ui,
-        id: Uuid,
-        scroll_to_end: bool,
-    ) -> egui::containers::scroll_area::ScrollAreaOutput<()> {
-        let visible_rows = ((ui.available_height().max(80.0) / 18.0).ceil() as usize).max(4);
-        let area = egui::ScrollArea::vertical()
-            .animated(!scroll_to_end)
-            .auto_shrink([false, false])
-            .id_salt(("notestrike-source", id));
-        area.show(ui, |ui| {
-            let editor = egui::TextEdit::multiline(&mut self.body_draft)
-                .desired_width(f32::INFINITY)
-                .desired_rows(visible_rows)
-                .code_editor();
-            let response = ui.add(editor);
-            if scroll_to_end {
-                ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
-            }
-            if response.changed() {
-                self.dirty = self
-                    .notebook
-                    .get(id)
-                    .is_some_and(|note| self.body_draft != note.body);
-            }
-        })
-    }
-
-    fn editor(&mut self, ui: &mut egui::Ui) {
-        let Some(id) = self.selected else {
-            ui.vertical_centered(|ui| {
-                ui.add_space(56.0);
-                ui.heading("Start with a note");
-                ui.label("Your notes are saved as local Markdown files in this notebook.");
-                ui.add_space(14.0);
-                if ui.button("Create a note").clicked() {
-                    self.create_note();
-                }
-            });
-            return;
-        };
-        let title = self
-            .notebook
-            .get(id)
-            .map(|note| note.title.clone())
-            .unwrap_or_default();
-        ui.heading(title);
-        ui.label(if self.dirty {
-            "Unsaved changes"
-        } else {
-            "No unsaved edits"
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(self.dirty, egui::Button::new("Save · Ctrl+S"))
-                .clicked()
-            {
-                self.save();
-            }
-            if self.dirty && ui.button("Discard").clicked() {
-                self.discard();
-            }
-            if ui
-                .button(if self.preview {
-                    "Edit source"
-                } else {
-                    "Preview"
-                })
-                .clicked()
-            {
-                self.preview = !self.preview;
-            }
-            if ui.button("Reload disk").clicked() {
-                if self.dirty {
-                    self.status =
-                        "Discard the unsaved edit or save a copy before reloading.".into();
-                } else {
-                    self.reload_disk();
-                }
-            }
-        });
-        if self.status.contains("changed on disk") && self.dirty {
-            ui.colored_label(
-                egui::Color32::from_rgb(139, 77, 22),
-                "The disk copy changed while this note was open.",
-            );
-            if ui.button("Save editor text as a separate note").clicked() {
-                self.create_copy();
-            }
-        }
-        ui.separator();
-        if self.preview {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if self.body_draft.trim().is_empty() {
-                    ui.label("Nothing to preview. Switch to Edit source to write this note.");
-                } else {
-                    markdown_preview(ui, &self.body_draft);
-                }
-            });
-        } else {
-            let scroll_to_end = self
-                .capture
-                .as_ref()
-                .is_some_and(|capture| capture.scroll_to_end);
-            self.source_editor(ui, id, scroll_to_end);
+    fn window_title(&self) -> String {
+        match self.ws.active_tab() {
+            Some(tab) => format!(
+                "{}{} - {APP_NAME}",
+                if tab.is_dirty() { "*" } else { "" },
+                tab.title()
+            ),
+            None => APP_NAME.into(),
         }
     }
 }
 
-impl eframe::App for NativeEditor {
+impl eframe::App for NoteStrikeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        if ui.input(|input| input.modifiers.command && input.key_pressed(egui::Key::S))
-            && self.dirty
-        {
-            self.save();
-        }
-        if !self.styled {
-            ctx.set_theme(egui::Theme::Light);
-            let mut style = (*ctx.style_of(egui::Theme::Light)).clone();
-            style.visuals = egui::Visuals::light();
-            style.visuals.panel_fill = egui::Color32::from_rgb(246, 247, 245);
-            style.visuals.extreme_bg_color = egui::Color32::WHITE;
-            style.visuals.override_text_color = Some(egui::Color32::from_rgb(30, 43, 42));
-            style.visuals.selection.bg_fill = egui::Color32::from_rgb(177, 222, 209);
-            style.visuals.widgets.inactive.bg_fill = egui::Color32::WHITE;
-            style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(226, 240, 235);
-            style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(191, 226, 216);
-            style
-                .text_styles
-                .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
-            style
-                .text_styles
-                .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
-            style
-                .text_styles
-                .insert(egui::TextStyle::Heading, egui::FontId::proportional(23.0));
-            style
-                .text_styles
-                .insert(egui::TextStyle::Monospace, egui::FontId::monospace(15.0));
-            style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-            style.spacing.button_padding = egui::vec2(10.0, 6.0);
-            ctx.set_style_of(egui::Theme::Light, style);
-            self.styled = true;
-        }
-        let compact = ui.available_width() < 1050.0;
-        egui::Panel::top("notestrike_toolbar")
-            .exact_size(54.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("NoteStrike");
-                    ui.separator();
-                    let notebook_name = self
-                        .root
-                        .file_name()
-                        .map(|name| name.to_string_lossy())
-                        .unwrap_or_default();
-                    ui.label(notebook_name.to_string())
-                        .on_hover_text(self.root.display().to_string());
-                });
-            });
-        egui::Panel::bottom("notestrike_status")
-            .exact_size(30.0)
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new(&self.status).small());
-            });
-        egui::Panel::left("notestrike_notes")
-            .exact_size(if compact { 230.0 } else { 270.0 })
-            .show(ui, |ui| self.note_list(ui));
-        if !compact {
-            egui::Panel::right("notestrike_context")
-                .exact_size(240.0)
-                .show(ui, |ui| self.context_rail(ui));
-        }
-        egui::CentralPanel::default().show(ui, |ui| {
-            if compact {
-                let backlink_count = self
-                    .selected
-                    .map(|id| self.notebook.backlinks(id).len())
-                    .unwrap_or(0);
-                egui::CollapsingHeader::new(format!("Details and backlinks ({backlink_count})"))
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .max_height(160.0)
-                            .show(ui, |ui| self.context_rail(ui));
-                    });
-                ui.separator();
-            }
-            self.editor(ui);
+        self.setup(&ctx);
+        self.apply_theme(&ctx);
+
+        // Files dropped onto the window open in new tabs.
+        let dropped: Vec<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .collect()
         });
+        if !dropped.is_empty() {
+            self.ws.open_paths(&dropped);
+        }
+
+        // Window close button / Alt+F4: ask about unsaved tabs first.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.closing {
+            self.ws.request_quit();
+            if !self.ws.quit_approved() {
+                ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            }
+        }
+
+        self.handle_shortcuts(&ctx);
+
+        egui::Panel::top("notestrike-menu").show(ui, |ui| self.menu_bar(ui));
+        egui::Panel::top("notestrike-tabs")
+            .frame(
+                egui::Frame::NONE
+                    .fill(ui.visuals().panel_fill)
+                    .inner_margin(egui::Margin {
+                        left: 6,
+                        right: 6,
+                        top: 4,
+                        bottom: 0,
+                    }),
+            )
+            .show(ui, |ui| self.tab_strip(ui));
+        if self.ws.settings.status_bar {
+            egui::Panel::bottom("notestrike-status")
+                .frame(
+                    egui::Frame::NONE
+                        .fill(ui.visuals().panel_fill)
+                        .inner_margin(egui::Margin::symmetric(10, 3)),
+                )
+                .show(ui, |ui| self.status_bar(ui));
+        }
+        if self.ws.find.visible {
+            egui::Panel::top("notestrike-find")
+                .frame(
+                    egui::Frame::NONE
+                        .fill(ui.visuals().extreme_bg_color)
+                        .inner_margin(egui::Margin::symmetric(10, 6)),
+                )
+                .show(ui, |ui| self.find_bar(ui));
+        }
+        let has_notice = self.ws.active_tab().is_some_and(|t| {
+            t.external != ExternalState::InSync
+                || t.invalid_sequences > 0
+                || t.contains_nul
+                || t.read_only
+                || t.mixed_eol.is_some()
+        });
+        if has_notice {
+            egui::Panel::top("notestrike-notices")
+                .frame(
+                    egui::Frame::NONE
+                        .fill(ui.visuals().faint_bg_color)
+                        .inner_margin(egui::Margin::symmetric(10, 6)),
+                )
+                .show(ui, |ui| self.notices(ui));
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(ui.visuals().extreme_bg_color))
+            .show(ui, |ui| self.editor(ui));
+
+        self.prompts(&ctx);
+
+        ctx.send_viewport_cmd(ViewportCommand::Title(self.window_title()));
+        self.ws.tick(Instant::now());
+        self.persist_settings();
+        ctx.request_repaint_after(Duration::from_millis(500));
+
+        if self.ws.quit_approved() && !self.closing {
+            self.closing = true;
+            self.ws.shutdown();
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+        }
         self.capture_after_frame(&ctx);
     }
 }
 
-fn markdown_preview(ui: &mut egui::Ui, source: &str) {
-    let mut code = false;
-    for line in source.lines() {
-        if line.trim_start().starts_with("```") {
-            code = !code;
-        } else if code {
-            ui.monospace(line);
-        } else if let Some(heading) = line.strip_prefix("# ") {
-            ui.heading(heading);
-        } else if let Some(heading) = line.strip_prefix("## ") {
-            ui.strong(heading);
-        } else if let Some(item) = line.strip_prefix("- ") {
-            ui.label(format!("• {item}"));
-        } else if line.is_empty() {
-            ui.add_space(8.0);
-        } else {
-            // Egui labels display raw HTML literally; they never execute it or load URLs.
-            ui.label(line);
+const SHORTCUTS_HELP: &str = "Ctrl+N / Ctrl+T\tNew tab\n\
+Ctrl+O\tOpen\n\
+Ctrl+S\tSave\n\
+Ctrl+Shift+S\tSave as\n\
+Ctrl+W\tClose tab\n\
+Ctrl+Tab / Ctrl+Shift+Tab\tNext / previous tab\n\
+Ctrl+Z / Ctrl+Y\tUndo / redo\n\
+Ctrl+X / Ctrl+C / Ctrl+V\tCut / copy / paste\n\
+Ctrl+A\tSelect all\n\
+Ctrl+F\tFind\n\
+F3 / Shift+F3\tFind next / previous\n\
+Ctrl+H\tReplace\n\
+Ctrl+G\tGo to line\n\
+Ctrl+Plus / Ctrl+Minus / Ctrl+0\tZoom in / out / reset\n\
+Esc\tClose the find bar or a dialog\n\
+Alt+F4\tExit";
+
+/// Prefer the Windows UI and monospace fonts when installed (loaded from the
+/// user's own system at runtime, never bundled); egui's built-in fonts stay
+/// as fallbacks for missing glyphs.
+fn install_system_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let candidates: [(&str, &[&str], egui::FontFamily); 2] = [
+        (
+            "system-ui",
+            &["C:\\Windows\\Fonts\\segoeui.ttf"],
+            egui::FontFamily::Proportional,
+        ),
+        (
+            "system-mono",
+            &[
+                "C:\\Windows\\Fonts\\consola.ttf",
+                "C:\\Windows\\Fonts\\CascadiaMono.ttf",
+            ],
+            egui::FontFamily::Monospace,
+        ),
+    ];
+    let mut changed = false;
+    for (name, paths, family) in candidates {
+        if let Some(bytes) = paths.iter().find_map(|p| std::fs::read(p).ok()) {
+            fonts
+                .font_data
+                .insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
+            fonts
+                .families
+                .entry(family)
+                .or_default()
+                .insert(0, name.into());
+            changed = true;
         }
     }
+    // Consolas and egui's Hack lack some symbols (e.g. U+FFFD, shown for
+    // undecodable bytes); fall back to the UI font for those glyphs.
+    if fonts.font_data.contains_key("system-ui") {
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("system-ui".into());
+    }
+    if changed {
+        ctx.set_fonts(fonts);
+    }
+}
+
+fn load_texture(ctx: &egui::Context, name: &str, png: &[u8]) -> Option<egui::TextureHandle> {
+    let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        .ok()?
+        .to_rgba8();
+    let size = [image.width() as usize, image.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+    Some(ctx.load_texture(name, color, egui::TextureOptions::LINEAR))
+}
+
+/// Window icon from the NoteStrike logo.
+pub fn window_icon() -> Option<egui::IconData> {
+    let image = image::load_from_memory_with_format(LOGO_PNG, image::ImageFormat::Png).ok()?;
+    let image = image
+        .resize(256, 256, image::imageops::FilterType::Triangle)
+        .to_rgba8();
+    Some(egui::IconData {
+        width: image.width(),
+        height: image.height(),
+        rgba: image.into_raw(),
+    })
+}
+
+fn write_capture_png(path: &Path, screenshot: &egui::ColorImage) -> Result<(), String> {
+    let [width, height] = screenshot.size;
+    let mut pixels = Vec::with_capacity(width * height * 4);
+    for color in &screenshot.pixels {
+        pixels.extend_from_slice(&color.to_array());
+    }
+    let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
+        .ok_or("Could not construct screenshot image")?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| format!("Create screenshot {}: {error}", path.display()))?;
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut file, image::ImageFormat::Png)
+        .map_err(|error| format!("Encode screenshot: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("Sync screenshot: {error}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    //! Headless frames of the real UI code: rendering every prompt, typing
+    //! into the editor, keyboard shortcuts, and the window close request.
+
+    use std::collections::VecDeque;
 
     use super::*;
+    use crate::encoding::Unrepresentable;
+    use crate::workspace::PendingSave;
 
-    #[test]
-    fn native_editor_surfaces_malformed_note_without_hiding_valid_notes() {
-        let root =
-            std::env::temp_dir().join(format!("notestrike-native-warning-{}", Uuid::new_v4()));
-        let mut notebook = Notebook::create(&root).unwrap();
-        let valid = notebook.add("Good note", "Visible text").unwrap();
-        fs::write(root.join("notes").join("broken.md"), b"bad front matter").unwrap();
-        let editor = NativeEditor::new(root.clone(), Notebook::open(&root).unwrap());
-        assert!(editor.status.contains("need repair"));
-        assert_eq!(
-            editor.matching_notes(),
-            vec![(valid.id, "Good note".into())]
-        );
-        assert_eq!(editor.notebook.warnings().len(), 1);
-        fs::remove_dir_all(root).unwrap();
+    #[derive(Default)]
+    struct Scripted {
+        save: VecDeque<Option<PathBuf>>,
     }
 
-    #[test]
-    fn editor_actions_save_reopen_search_backlinks_and_preserve_conflicts() {
-        let root = std::env::temp_dir().join(format!("notestrike-native-{}", Uuid::new_v4()));
-        let mut notebook = Notebook::create(&root).unwrap();
-        let guide = notebook.add("Valve Guide", "Pressure: 12 bar.").unwrap();
-        let field = notebook.add("Field Log", "Initial field text.").unwrap();
-
-        let mut editor = NativeEditor::new(root.clone(), notebook);
-        editor.select(field.id);
-        editor.body_draft = format!("Observed blue valves. [[{}|Valve Guide]]", guide.id);
-        editor.dirty = true;
-        editor.save();
-        assert!(!editor.dirty, "{}", editor.status);
-        editor.search = "blue".into();
-        assert_eq!(
-            editor.matching_notes(),
-            vec![(field.id, "Field Log".into())]
-        );
-        assert_eq!(
-            editor.backlink_notes(guide.id),
-            vec![(field.id, "Field Log".into())]
-        );
-        drop(editor);
-
-        let reopened = Notebook::open(&root).unwrap();
-        assert!(
-            reopened
-                .get(field.id)
-                .unwrap()
-                .body
-                .contains(&guide.id.to_string())
-        );
-        let mut editor = NativeEditor::new(root.clone(), reopened);
-        editor.select(guide.id);
-        assert_eq!(editor.selected, Some(guide.id), "{}", editor.status);
-        assert!(!editor.dirty, "{}", editor.status);
-        editor.rename_draft = "Valve Handbook".into();
-        editor.rename();
-        assert_eq!(
-            editor.status, "Title saved; ID links still point here.",
-            "rename failed: selected={:?}, draft={}",
-            editor.selected, editor.rename_draft
-        );
-        assert_eq!(
-            editor.notebook.get(guide.id).unwrap().title,
-            "Valve Handbook",
-            "status: {}; selected: {:?}; draft: {}",
-            editor.status,
-            editor.selected,
-            editor.rename_draft
-        );
-        assert_eq!(editor.backlink_notes(guide.id).len(), 1);
-
-        editor.select(field.id);
-        editor.body_draft = "Local unsaved field text.".into();
-        editor.dirty = true;
-        let mut external = Notebook::open(&root).unwrap();
-        external.update(field.id, "Disk update wins.").unwrap();
-        editor.save();
-        assert!(editor.status.contains("changed on disk"));
-        assert!(editor.dirty);
-        editor.create_copy();
-        assert!(editor.status.contains("separate copy"), "{}", editor.status);
-
-        let final_book = Notebook::open(&root).unwrap();
-        assert_eq!(final_book.get(field.id).unwrap().body, "Disk update wins.");
-        assert_eq!(final_book.get(guide.id).unwrap().title, "Valve Handbook");
-        assert_eq!(
-            final_book.get(editor.selected.unwrap()).unwrap().body,
-            "Local unsaved field text."
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn long_source_has_scrollable_compact_viewport() {
-        let root =
-            std::env::temp_dir().join(format!("notestrike-native-scroll-{}", Uuid::new_v4()));
-        let mut notebook = Notebook::create(&root).unwrap();
-        let mut body = String::from("# Project Hub\n\n");
-        for line in 1..=60 {
-            body.push_str(&format!(
-                "- Review item {line:02}: capture the next decision.\n"
-            ));
+    impl FileDialogs for Scripted {
+        fn open_files(&mut self) -> Option<Vec<PathBuf>> {
+            None
         }
-        body.push_str("FINAL ACCESSIBLE LINE: save and close the review.\n");
-        let note = notebook.add("A Project Hub", &body).unwrap();
-        let mut editor = NativeEditor::new(root.clone(), notebook);
-        let context = egui::Context::default();
-        let mut measurement = None;
-        for _ in 0..2 {
+        fn save_file(&mut self, _: &str, _: Option<&Path>) -> Option<PathBuf> {
+            self.save.pop_front().flatten()
+        }
+        fn pick_folder(&mut self, _: &str) -> Option<PathBuf> {
+            None
+        }
+    }
+
+    fn frame(
+        app: &mut NoteStrikeApp,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        close: bool,
+    ) -> egui::FullOutput {
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        if close {
+            input
+                .viewports
+                .entry(egui::ViewportId::ROOT)
+                .or_default()
+                .events
+                .push(egui::ViewportEvent::Close);
+        }
+        let mut eframe_frame = eframe::Frame::_new_kittest();
+        let mut output = ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut eframe_frame));
+        output.textures_delta.clear();
+        output
+    }
+
+    fn app_with(dialogs: Scripted) -> NoteStrikeApp {
+        NoteStrikeApp::new(
+            Workspace::new(None, Settings::default()),
+            Box::new(dialogs),
+            None,
+        )
+    }
+
+    #[test]
+    fn typing_marks_dirty_and_ctrl_s_saves_through_save_as() {
+        let dir =
+            std::env::temp_dir().join(format!("notestrike-ui-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("typed.txt");
+        let mut app = app_with(Scripted {
+            save: VecDeque::from([Some(target.clone())]),
+        });
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, vec![], false);
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("Sample line".into())],
+            false,
+        );
+        assert_eq!(app.ws.active_tab().unwrap().text, "Sample line");
+        assert!(app.ws.active_tab().unwrap().is_dirty());
+        assert_eq!(app.window_title(), "*Untitled 1 - NoteStrike");
+        let ctrl_s = egui::Event::Key {
+            key: Key::S,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        };
+        frame(&mut app, &ctx, vec![ctrl_s], false);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "Sample line");
+        assert!(!app.ws.active_tab().unwrap().is_dirty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn window_close_with_unsaved_text_is_cancelled_and_asks() {
+        let mut app = app_with(Scripted::default());
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, vec![], false);
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text("unsaved".into())],
+            false,
+        );
+        let output = frame(&mut app, &ctx, vec![], true);
+        let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+        assert!(commands.contains(&ViewportCommand::CancelClose));
+        assert!(matches!(
+            app.ws.current_prompt(),
+            Some(Prompt::UnsavedOnQuit { .. })
+        ));
+        assert!(!app.ws.quit_approved());
+    }
+
+    #[test]
+    fn every_prompt_renders_headlessly() {
+        let mut app = app_with(Scripted::default());
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, vec![], false);
+        let tab = app.ws.active_tab().unwrap().id;
+        let save = PendingSave {
+            tab,
+            save_as: false,
+            chosen_path: None,
+            overwrite_external: false,
+            accept_lossy: false,
+        };
+        let prompts = vec![
+            Prompt::UnsavedTab { tab },
+            Prompt::UnsavedOnQuit { tabs: vec![tab] },
+            Prompt::ChangedOnDisk { save: save.clone() },
+            Prompt::LossySave { save: save.clone() },
+            Prompt::Unrepresentable {
+                save: save.clone(),
+                details: Unrepresentable {
+                    encoding: TextEncoding::Windows1252,
+                    count: 1,
+                    first: '☃',
+                    first_char_index: 0,
+                },
+            },
+            Prompt::ReadOnly { save },
+            Prompt::LargeFile {
+                path: PathBuf::from("big.log"),
+                size: 9 * 1024 * 1024,
+            },
+            Prompt::ConfirmReload {
+                tab,
+                encoding: None,
+            },
+            Prompt::Recovery { orphans: vec![] },
+            Prompt::ConfirmDiscardRecovery { orphans: vec![] },
+            Prompt::GoToLine,
+            Prompt::Message {
+                title: "Title".into(),
+                body: "Body".into(),
+            },
+            Prompt::About,
+        ];
+        for prompt in prompts {
+            app.ws.prompts.clear();
+            app.ws.prompts.push_back(prompt);
+            frame(&mut app, &ctx, vec![], false);
+            frame(&mut app, &ctx, vec![], false);
+            assert!(
+                app.ws.current_prompt().is_some(),
+                "prompt stays until answered"
+            );
+        }
+        // Escape dismisses a message.
+        app.ws.prompts.clear();
+        app.ws.prompts.push_back(Prompt::About);
+        let esc = egui::Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        frame(&mut app, &ctx, vec![esc], false);
+        assert!(app.ws.current_prompt().is_none());
+    }
+
+    #[test]
+    fn find_bar_and_narrow_layout_render() {
+        let mut app = app_with(Scripted::default());
+        app.ws.active_tab_mut().unwrap().text = "alpha beta alpha".into();
+        app.ws.show_find(true);
+        app.ws.find.needle = "alpha".into();
+        app.ws.settings.word_wrap = false;
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(800.0, 520.0),
+                    egui::vec2(380.0, 500.0),
                 )),
                 ..Default::default()
             };
-            let mut output = context.run_ui(input, |ui| {
-                let output = editor.source_editor(ui, note.id, true);
-                measurement = Some((output.content_size.y, output.inner_rect.height()));
-            });
-            output.textures_delta.clear();
+            let mut eframe_frame = eframe::Frame::_new_kittest();
+            ctx.run_ui(input, |ui| eframe::App::ui(&mut app, ui, &mut eframe_frame))
+                .textures_delta
+                .clear();
         }
-        let (content_height, viewport_height) = measurement.unwrap();
-        assert!(viewport_height <= 520.0);
-        assert!(content_height > viewport_height + 100.0);
-        assert!(
-            editor
-                .body_draft
-                .ends_with("FINAL ACCESSIBLE LINE: save and close the review.\n")
-        );
-        fs::remove_dir_all(root).unwrap();
+        assert!(app.ws.find_step(true));
+        assert_eq!(app.ws.selection, (0, 5));
     }
 }
