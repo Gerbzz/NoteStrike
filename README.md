@@ -8,7 +8,7 @@
 Tabs, safe saves, encodings and line endings handled honestly, and your unsaved work recovered after a crash.</p>
 
 <p align="center">
-  Status: <strong>alpha</strong> · Hands-on tested: Windows 11 · Linux and macOS: see <a href="#platforms">Platforms</a> · Part of the PWDS Strike suite
+  Status: <strong>alpha</strong> · Not hands-on tested on any OS yet · CI: see <a href="#platforms">Platforms</a> · Part of the PWDS Strike suite
 </p>
 
 ![NoteStrike editing a sample checklist in the light theme, with two tabs and the status bar showing line, column, line endings and encoding](assets/screenshots/notestrike-editor-light.png)
@@ -166,15 +166,15 @@ A platform is listed as **supported** only after CI has built and tested it ther
 
 | Platform | Status | Evidence |
 |---|---|---|
-| Windows (x64) | **Supported.** Built and tested in CI; hands-on tested on Windows 11 | [CI run 39163714508](https://github.com/Gerbzz/NoteStrike/actions/runs/39163714508) on `windows-latest`, rustc 1.99.1: fmt check, `cargo test` with the GUI feature (70 passed, 0 failed), debug build of both binaries |
-| Linux (Ubuntu, x64) | **Supported (CI only).** Built and tested in CI, not hands-on tested | [CI run 39163714508](https://github.com/Gerbzz/NoteStrike/actions/runs/39163714508) on `ubuntu-latest`, rustc 1.99.1: `cargo test` with the GUI feature (71 passed, 0 failed), debug build, and a 960x640 capture of the real window under xvfb |
+| Windows (x64) | **Supported (CI only).** Built and tested in CI; not hands-on tested | [CI run 39164001079](https://github.com/Gerbzz/NoteStrike/actions/runs/39164001079) (commit 02313a7) on `windows-latest`, rustc 1.99.1: fmt check, `cargo test` with the GUI feature (70 passed, 0 failed), debug build of both binaries |
+| Linux (Ubuntu, x64) | **Supported (CI only).** Built and tested in CI, not hands-on tested | [CI run 39164001079](https://github.com/Gerbzz/NoteStrike/actions/runs/39164001079) (commit 02313a7) on `ubuntu-latest`, rustc 1.99.1: `cargo test` with the GUI feature (71 passed, 0 failed), debug build, and a 960x640 capture of the real window under xvfb |
 | macOS (Apple silicon) | **Not verified yet.** Not built or tested anywhere so far | The macOS CI job is in the matrix workflow, which has not been pushed yet (see below) |
 
 That run used the older two-job workflow, which has no clippy step, no release build and no macOS job. The matrix workflow in `.github/workflows/native-editor.yml` (windows-latest, ubuntu-latest and macos-latest, with fmt, clippy `-D warnings`, `cargo test --locked --all-features`, release builds, window captures, and artifacts) is ready. It is not yet on GitHub because the push needs a token with the `workflow` scope. This table gets updated when it runs.
 
 ## Limitations
 
-- **Hands-on tested on Windows 11 only.** Linux and macOS are built and tested in CI (see [Platforms](#platforms)), but nobody has used the editor on those desktops yet: native file dialogs, clipboard, IME, the macOS app menu and screen readers there are unverified.
+- **Not hands-on tested on any OS.** Windows and Linux are built and tested in CI (see [Platforms](#platforms)), and the screenshots come from the app's own `--capture` mode, but nobody has clicked or typed in the running editor yet: native file dialogs, clipboard, IME, the macOS app menu and screen readers are unverified on every OS.
 - **Not a large-file editor.** The whole file stays in memory and is laid out by egui; a few MB is comfortable, and files over 64 MiB are refused.
 - **Mixed line endings** are unified to the dominant style on save (you are told when the file opens).
 - **Saving replaces the file** through a rename. This keeps the content safe, but a hard link to the old file keeps the old content, and Windows ACLs or alternate data streams on the original file are not copied.
@@ -197,7 +197,7 @@ That run used the older two-job workflow, which has no clippy step, no release b
 | Session restore after normal exit, recent files | Planned |
 | Printing | Planned |
 | Linux and macOS: CI build, tests and window capture | Implemented, see [Platforms](#platforms) |
-| Linux and macOS: hands-on desktop verification | Planned |
+| Hands-on desktop verification (Windows, Linux, macOS) | Planned |
 
 ## Credits and licenses
 
