@@ -14,7 +14,8 @@ use std::process::ExitCode;
 
 use eframe::egui;
 use notestrike::native_ui::{self, NativeDialogs, NoteStrikeApp};
-use notestrike::recovery::{self, RecoveryStore};
+use notestrike::paths::AppDirs;
+use notestrike::recovery::RecoveryStore;
 use notestrike::workspace::{Settings, Workspace};
 
 fn main() -> ExitCode {
@@ -55,11 +56,16 @@ fn main() -> ExitCode {
     }
     let files: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
 
-    let data_dir = recovery::data_dir();
-    let recovery = data_dir
+    let dirs = AppDirs::current();
+    if let Some(dirs) = &dirs
+        && let Err(error) = dirs.migrate()
+    {
+        eprintln!("NoteStrike: could not copy settings from an earlier version: {error}");
+    }
+    let recovery = dirs
         .as_ref()
-        .and_then(|dir| RecoveryStore::open(&dir.join("recovery")).ok());
-    let settings_path = data_dir.as_ref().map(|dir| dir.join("settings.json"));
+        .and_then(|dirs| RecoveryStore::open(&dirs.recovery_dir).ok());
+    let settings_path = dirs.map(|dirs| dirs.settings_file);
     let settings = settings_path
         .as_deref()
         .map(Settings::load)

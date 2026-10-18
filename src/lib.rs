@@ -8,6 +8,7 @@
 //! * [`document`]: size-checked loads and atomic, conflict-checked saves.
 //! * [`search`]: find / replace and cursor helpers.
 //! * [`recovery`]: crash/session recovery journal.
+//! * [`paths`]: per-OS settings and recovery locations, and their migration.
 //! * [`workspace`]: tabs, dirty tracking, prompts, and save/close/quit flows.
 //! * [`legacy`]: read-only access to NoteStrike 0.1 notebooks and import of
 //!   their notes as plain files.
@@ -16,6 +17,7 @@ pub mod document;
 pub mod encoding;
 pub mod eol;
 pub mod legacy;
+pub mod paths;
 pub mod recovery;
 pub mod search;
 pub mod workspace;
