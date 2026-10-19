@@ -838,14 +838,18 @@ impl NoteStrikeApp {
                 self.scroll_to_selection = true;
             }
             if ui
-                .button("↑")
+                .button(FIND_PREVIOUS_ICON)
                 .on_hover_text("Find previous (Shift+F3)")
                 .clicked()
             {
                 self.ws.find_step(false);
                 self.scroll_to_selection = true;
             }
-            if ui.button("↓").on_hover_text("Find next (F3)").clicked() {
+            if ui
+                .button(FIND_NEXT_ICON)
+                .on_hover_text("Find next (F3)")
+                .clicked()
+            {
                 self.ws.find_step(true);
                 self.scroll_to_selection = true;
             }
@@ -1534,6 +1538,12 @@ mod desktop_theme {
         }
     }
 }
+
+/// Find bar arrows. These come from egui's built-in icon font, so they render
+/// on every OS: macOS uses only egui's fonts, which have no U+2191/U+2193
+/// arrows (CI captures showed empty boxes there).
+const FIND_PREVIOUS_ICON: &str = "⏶";
+const FIND_NEXT_ICON: &str = "⏷";
 
 /// Label of View > Theme > System for this platform.
 const SYSTEM_THEME_LABEL: &str = if cfg!(windows) {
