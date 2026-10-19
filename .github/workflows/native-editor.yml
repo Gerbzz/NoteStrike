@@ -1,72 +1,111 @@
 name: Native editor checks
 
 on:
+  push:
+    branches: [main, "notestrike-**"]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  windows:
-    runs-on: windows-latest
+  native:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - name: Formatting
-        run: cargo fmt --all -- --check
-      - name: Tests
-        run: cargo test --locked --features native-ui -j 2
-      - name: Native editor build
-        run: cargo build --locked --features native-ui --bin notestrike --bin notestrike-cli -j 2
-  linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Software OpenGL display
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libxkbcommon-dev libxkbcommon-x11-0
-      - name: Tests
-        run: cargo test --locked --features native-ui -j 2
-      - name: Build editor and fixture CLI
-        run: cargo build --locked --features native-ui --bin notestrike --bin notestrike-cli -j 2
-      - name: Capture populated editor
+          components: rustfmt, clippy
+
+      # The packages the README lists for building on Debian/Ubuntu, plus a
+      # virtual X server and Mesa's software OpenGL for the capture step.
+      - name: Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
+            xvfb libgl1-mesa-dri
+
+      - name: Toolchain
         shell: bash
         run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/notestrike-editor-visual"
-          mkdir -p "$root"
-          printf 'Project Hub\n\nReview priorities\nCapture decisions\nFollow up on open tasks\n' > "$root/fixture.txt"
-          export LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe
-          export XDG_DATA_HOME="$RUNNER_TEMP/notestrike-data"
-          timeout 50s xvfb-run -a -s '-screen 0 1600x1000x24' \
-            ./target/debug/notestrike --capture "$root/editor.png" 960 640 "$root/fixture.txt"
-          python3 - "$root/editor.png" <<'PY'
-          import pathlib, struct, sys, zlib
-          data = pathlib.Path(sys.argv[1]).read_bytes()
-          if len(data) < 5000 or not data.startswith(b'\x89PNG\r\n\x1a\n'):
-              raise SystemExit('Native editor capture is incomplete')
-          width, height = struct.unpack('>II', data[16:24])
-          if width < 960 or height < 640:
-              raise SystemExit(f'Unexpected editor dimensions: {width}x{height}')
-          offset, pixels = 8, bytearray()
-          while offset < len(data):
-              length = struct.unpack('>I', data[offset:offset + 4])[0]
-              kind = data[offset + 4:offset + 8]
-              if kind == b'IDAT':
-                  pixels.extend(data[offset + 8:offset + 8 + length])
-              offset += length + 12
-          if len(set(zlib.decompress(pixels))) < 24:
-              raise SystemExit('Native editor capture lacks visible content')
-          print(f'Captured populated editor: {width}x{height}, {len(data)} bytes')
-          PY
-      - name: Upload editor PNG
+          rustc --version
+          cargo --version
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (all features)
+        run: cargo clippy --locked --all-features --all-targets -- -D warnings
+
+      - name: Clippy (library and CLI only)
+        run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
+
+      - name: Tests (all features)
+        run: cargo test --locked --all-features
+
+      - name: Release build
+        run: cargo build --locked --release --all-features --bin notestrike --bin notestrike-cli
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # Opens the real window, renders one frame, writes a PNG and exits.
+      # Linux runs it on a virtual X server with Mesa's software renderer.
+      - name: Capture the real window (Linux, xvfb)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1000x24' \
+            python scripts/ci_capture.py target/release/notestrike "$RUNNER_TEMP/notestrike-captures"
+
+      - name: Capture the real window (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: python scripts/ci_capture.py target/release/notestrike "$RUNNER_TEMP/notestrike-captures"
+
+      # Hosted Windows runners have no GPU driver, only GDI's OpenGL 1.1, and
+      # the editor needs OpenGL 2+. Tried, but not required to pass.
+      - name: Capture the real window (Windows, best effort)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: python scripts/ci_capture.py target/release/notestrike.exe "$RUNNER_TEMP/notestrike-captures"
+
+      - name: Upload captures
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: notestrike-editor-visual
-          path: ${{ runner.temp }}/notestrike-editor-visual/editor.png
-          if-no-files-found: ignore
-          retention-days: 1
+          name: notestrike-captures-${{ runner.os }}
+          path: ${{ runner.temp }}/notestrike-captures/*.png
+          if-no-files-found: warn
+          retention-days: 14
 
+      - name: Upload release binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: notestrike-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/release/notestrike
+            target/release/notestrike-cli
+            target/release/notestrike.exe
+            target/release/notestrike-cli.exe
+          if-no-files-found: error
+          retention-days: 14

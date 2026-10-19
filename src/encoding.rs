@@ -267,8 +267,10 @@ fn decode_utf16(
     let body = bytes.strip_prefix(bom).unwrap_or(bytes);
     let skipped = bytes.len() - body.len();
     let units: Vec<u16> = body
-        .chunks_exact(2)
-        .map(|pair| unit([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| unit(*pair))
         .collect();
     let mut text = String::with_capacity(units.len());
     let mut invalid = 0;
@@ -303,7 +305,7 @@ fn sniff_utf16(bytes: &[u8]) -> Option<TextEncoding> {
     }
     let pairs = bytes.len() / 2;
     let (mut even_zero, mut odd_zero) = (0usize, 0usize);
-    for pair in bytes.chunks_exact(2) {
+    for pair in bytes.as_chunks::<2>().0 {
         even_zero += usize::from(pair[0] == 0);
         odd_zero += usize::from(pair[1] == 0);
     }

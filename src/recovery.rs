@@ -22,23 +22,6 @@ use crate::document::{self, FaultPlan};
 use crate::encoding::TextEncoding;
 use crate::eol::LineEnding;
 
-/// Per-user data folder: `%LOCALAPPDATA%\PWDS\NoteStrike` on Windows,
-/// `$XDG_DATA_HOME/notestrike` (or `~/.local/share/notestrike`) elsewhere.
-/// `NOTESTRIKE_DATA_DIR` overrides it (used by tests and portable setups).
-pub fn data_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("NOTESTRIKE_DATA_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    if cfg!(windows) {
-        return std::env::var_os("LOCALAPPDATA")
-            .map(|base| PathBuf::from(base).join("PWDS").join("NoteStrike"));
-    }
-    if let Some(base) = std::env::var_os("XDG_DATA_HOME") {
-        return Some(PathBuf::from(base).join("notestrike"));
-    }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/notestrike"))
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JournalEntry {
     pub tab_id: u64,
@@ -281,7 +264,7 @@ fn open_exclusive_lock(path: &Path) -> io::Result<fs::File> {
 }
 
 /// A session is alive while some process still holds its lock.
-fn session_is_alive(dir: &Path, session: &str) -> bool {
+pub(crate) fn session_is_alive(dir: &Path, session: &str) -> bool {
     let lock = dir.join(format!("{session}.lock"));
     let Ok(file) = OpenOptions::new().read(true).write(true).open(&lock) else {
         return false;

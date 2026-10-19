@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Color32, FontId, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextBuffer,
+    self, Align, Color32, FontId, Key, KeyboardShortcut, Layout, RichText, TextBuffer,
     ViewportCommand,
 };
 use egui::text::{CCursor, CCursorRange, LayoutJob};
@@ -26,7 +26,8 @@ pub const APP_NAME: &str = "NoteStrike";
 pub const LOGO_PNG: &[u8] = include_bytes!("../assets/branding/NoteStrike.png");
 pub const PWDS_LOGO_PNG: &[u8] = include_bytes!("../assets/branding/PWDS-logo.png");
 
-/// Native file dialogs (Windows common item dialogs via `rfd`).
+/// Native file dialogs through `rfd`: the common item dialogs on Windows,
+/// NSOpenPanel/NSSavePanel on macOS, and GTK 3 (or the XDG portal) on Linux.
 pub struct NativeDialogs;
 
 impl FileDialogs for NativeDialogs {
@@ -101,6 +102,182 @@ pub struct NoteStrikeApp {
 
 const BASE_FONT_SIZE: f32 = 14.0;
 
+/// Keyboard shortcuts. `Modifiers::COMMAND` is Ctrl on Windows and Linux and
+/// Cmd on macOS. Where macOS reserves or conventionally uses a different key
+/// (Cmd+H hides the app, Cmd+G is Find Next, Cmd+Tab switches apps), the Mac
+/// binding follows the Mac convention. Menu labels are generated from these
+/// definitions, so they always show the key that actually works.
+pub mod keys {
+    use eframe::egui::{Key, KeyboardShortcut, ModifierNames, Modifiers};
+
+    pub const IS_MAC: bool = cfg!(target_os = "macos");
+
+    const CMD: Modifiers = Modifiers::COMMAND;
+    const CMD_SHIFT: Modifiers = Modifiers::COMMAND.plus(Modifiers::SHIFT);
+    const fn cmd(key: Key) -> KeyboardShortcut {
+        KeyboardShortcut::new(CMD, key)
+    }
+    const fn pick(mac: KeyboardShortcut, other: KeyboardShortcut) -> KeyboardShortcut {
+        if IS_MAC { mac } else { other }
+    }
+
+    pub const NEW_TAB: KeyboardShortcut = cmd(Key::N);
+    pub const NEW_TAB_ALT: KeyboardShortcut = cmd(Key::T);
+    pub const OPEN: KeyboardShortcut = cmd(Key::O);
+    pub const SAVE: KeyboardShortcut = cmd(Key::S);
+    pub const SAVE_AS: KeyboardShortcut = KeyboardShortcut::new(CMD_SHIFT, Key::S);
+    pub const CLOSE_TAB: KeyboardShortcut = cmd(Key::W);
+    pub const CLOSE_TAB_ALT: KeyboardShortcut = cmd(Key::F4);
+    /// Ctrl+Tab on every platform: Cmd+Tab is the macOS app switcher.
+    pub const NEXT_TAB: KeyboardShortcut = KeyboardShortcut::new(Modifiers::CTRL, Key::Tab);
+    pub const PREVIOUS_TAB: KeyboardShortcut =
+        KeyboardShortcut::new(Modifiers::CTRL.plus(Modifiers::SHIFT), Key::Tab);
+    pub const UNDO: KeyboardShortcut = cmd(Key::Z);
+    pub const REDO: KeyboardShortcut = pick(KeyboardShortcut::new(CMD_SHIFT, Key::Z), cmd(Key::Y));
+    pub const CUT: KeyboardShortcut = cmd(Key::X);
+    pub const COPY: KeyboardShortcut = cmd(Key::C);
+    pub const PASTE: KeyboardShortcut = cmd(Key::V);
+    pub const SELECT_ALL: KeyboardShortcut = cmd(Key::A);
+    pub const FIND: KeyboardShortcut = cmd(Key::F);
+    pub const FIND_NEXT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::F3);
+    pub const FIND_PREVIOUS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::SHIFT, Key::F3);
+    /// Cmd+G / Cmd+Shift+G on macOS, in addition to F3 / Shift+F3.
+    pub const FIND_NEXT_ALT: Option<KeyboardShortcut> =
+        if IS_MAC { Some(cmd(Key::G)) } else { None };
+    pub const FIND_PREVIOUS_ALT: Option<KeyboardShortcut> = if IS_MAC {
+        Some(KeyboardShortcut::new(CMD_SHIFT, Key::G))
+    } else {
+        None
+    };
+    /// Cmd+Option+F on macOS (Cmd+H hides the app); Ctrl+H elsewhere.
+    pub const REPLACE: KeyboardShortcut = pick(
+        KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::F),
+        cmd(Key::H),
+    );
+    /// Cmd+L on macOS (Cmd+G is Find Next there); Ctrl+G elsewhere.
+    pub const GO_TO_LINE: KeyboardShortcut = pick(cmd(Key::L), cmd(Key::G));
+    pub const ZOOM_IN: KeyboardShortcut = cmd(Key::Plus);
+    pub const ZOOM_IN_ALT: KeyboardShortcut = cmd(Key::Equals);
+    pub const ZOOM_OUT: KeyboardShortcut = cmd(Key::Minus);
+    pub const ZOOM_RESET: KeyboardShortcut = cmd(Key::Num0);
+
+    /// "Ctrl+S" on Windows and Linux, "Cmd+S" on macOS.
+    pub fn label(shortcut: KeyboardShortcut) -> String {
+        shortcut.format(&ModifierNames::NAMES, IS_MAC)
+    }
+
+    /// How the window is closed from the keyboard on this platform.
+    pub fn quit_label() -> &'static str {
+        if IS_MAC { "Cmd+Q" } else { "Alt+F4" }
+    }
+
+    /// The Help > Keyboard shortcuts text for this platform.
+    pub fn help_text() -> String {
+        let l = label;
+        let mut rows = vec![
+            (format!("{} / {}", l(NEW_TAB), l(NEW_TAB_ALT)), "New tab"),
+            (l(OPEN), "Open"),
+            (l(SAVE), "Save"),
+            (l(SAVE_AS), "Save as"),
+            (l(CLOSE_TAB), "Close tab"),
+            (
+                format!("{} / {}", l(NEXT_TAB), l(PREVIOUS_TAB)),
+                "Next / previous tab",
+            ),
+            (format!("{} / {}", l(UNDO), l(REDO)), "Undo / redo"),
+            (
+                format!("{} / {} / {}", l(CUT), l(COPY), l(PASTE)),
+                "Cut / copy / paste",
+            ),
+            (l(SELECT_ALL), "Select all"),
+            (l(FIND), "Find"),
+        ];
+        let mut next = format!("{} / {}", l(FIND_NEXT), l(FIND_PREVIOUS));
+        if let (Some(n), Some(p)) = (FIND_NEXT_ALT, FIND_PREVIOUS_ALT) {
+            next = format!("{next} or {} / {}", l(n), l(p));
+        }
+        rows.push((next, "Find next / previous"));
+        rows.push((l(REPLACE), "Replace"));
+        rows.push((l(GO_TO_LINE), "Go to line"));
+        rows.push((
+            format!("{} / {} / {}", l(ZOOM_IN), l(ZOOM_OUT), l(ZOOM_RESET)),
+            "Zoom in / out / reset",
+        ));
+        rows.push(("Esc".into(), "Close the find bar or a dialog"));
+        rows.push((quit_label().into(), "Exit"));
+        rows.iter()
+            .map(|(keys, action)| format!("{keys}\t{action}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// Map the persisted theme setting to egui's preference. `System` lets egui
+/// follow the operating system's light/dark setting (reported by winit) and
+/// falls back to egui's default when the OS does not report one.
+pub fn theme_preference(choice: ThemeChoice) -> egui::ThemePreference {
+    match choice {
+        ThemeChoice::System => egui::ThemePreference::System,
+        ThemeChoice::Light => egui::ThemePreference::Light,
+        ThemeChoice::Dark => egui::ThemePreference::Dark,
+    }
+}
+
+/// Colours that NoteStrike sets on top of egui's light and dark visuals.
+/// Every text/background pair is checked against WCAG AA in the tests below.
+pub mod palette {
+    use eframe::egui::{Color32, Theme};
+
+    pub struct Palette {
+        pub panel: Color32,
+        pub editor: Color32,
+        /// Editor text override (`None` keeps egui's text colour).
+        pub editor_text: Option<Color32>,
+        pub weak_text: Color32,
+        pub warn_text: Color32,
+        pub error_text: Color32,
+        pub notice_bg: Color32,
+        pub notice_text: Color32,
+        pub warn_icon: Color32,
+        /// How strongly the accent tints the text selection.
+        pub selection_strength: f32,
+    }
+
+    pub const LIGHT: Palette = Palette {
+        panel: Color32::from_rgb(243, 243, 243),
+        editor: Color32::WHITE,
+        editor_text: None,
+        weak_text: Color32::from_rgb(0x5F, 0x5F, 0x5F),
+        warn_text: Color32::from_rgb(0x9A, 0x34, 0x12),
+        error_text: Color32::from_rgb(0xB9, 0x1C, 0x1C),
+        notice_bg: Color32::from_rgb(0xFF, 0xF4, 0xE5),
+        notice_text: Color32::from_rgb(0x1F, 0x1F, 0x1F),
+        warn_icon: Color32::from_rgb(0x92, 0x40, 0x0E),
+        selection_strength: 0.3,
+    };
+
+    pub const DARK: Palette = Palette {
+        panel: Color32::from_rgb(32, 32, 32),
+        editor: Color32::from_rgb(24, 24, 24),
+        editor_text: Some(Color32::from_rgb(0xD4, 0xD4, 0xD4)),
+        weak_text: Color32::from_rgb(0xA0, 0xA0, 0xA0),
+        warn_text: Color32::from_rgb(0xFB, 0xBF, 0x24),
+        error_text: Color32::from_rgb(0xF8, 0x71, 0x71),
+        notice_bg: Color32::from_rgb(0x2B, 0x24, 0x14),
+        notice_text: Color32::from_rgb(0xF0, 0xF0, 0xF0),
+        warn_icon: Color32::from_rgb(0xFA, 0xCC, 0x15),
+        selection_strength: 0.45,
+    };
+
+    pub fn for_theme(theme: Theme) -> &'static Palette {
+        for_dark(theme == Theme::Dark)
+    }
+
+    pub fn for_dark(dark: bool) -> &'static Palette {
+        if dark { &DARK } else { &LIGHT }
+    }
+}
+
 impl NoteStrikeApp {
     pub fn new(
         ws: Workspace,
@@ -146,6 +323,13 @@ impl NoteStrikeApp {
         }
         self.setup_done = true;
         install_system_fonts(ctx);
+        // winit reports the OS theme on Windows, macOS and some Wayland
+        // compositors, but never on X11. Ask the desktop instead, so System
+        // does not fall back to dark on a light Linux desktop.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(theme) = desktop_theme::detect() {
+            ctx.options_mut(|o| o.fallback_theme = theme);
+        }
         // Ctrl +/- zoom the text, not the whole interface.
         ctx.options_mut(|o| o.zoom_with_keyboard = false);
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
@@ -170,15 +354,17 @@ impl NoteStrikeApp {
                 } else {
                     Color32::from_rgb(96, 165, 250)
                 };
-                style.visuals.selection.bg_fill = accent.gamma_multiply(0.45);
+                style.visuals.selection.bg_fill =
+                    accent.gamma_multiply(palette::for_theme(theme).selection_strength);
                 style.visuals.hyperlink_color = accent;
-                if theme == egui::Theme::Light {
-                    style.visuals.panel_fill = Color32::from_rgb(243, 243, 243);
-                    style.visuals.extreme_bg_color = Color32::WHITE;
-                } else {
-                    style.visuals.panel_fill = Color32::from_rgb(32, 32, 32);
-                    style.visuals.extreme_bg_color = Color32::from_rgb(24, 24, 24);
-                }
+                let p = palette::for_theme(theme);
+                style.visuals.panel_fill = p.panel;
+                style.visuals.extreme_bg_color = p.editor;
+                // egui's default weak and warning colours miss WCAG AA on
+                // these backgrounds; use the checked palette instead.
+                style.visuals.weak_text_color = Some(p.weak_text);
+                style.visuals.warn_fg_color = p.warn_text;
+                style.visuals.error_fg_color = p.error_text;
             });
         }
         self.logo = load_texture(ctx, "notestrike-logo", LOGO_PNG);
@@ -190,11 +376,7 @@ impl NoteStrikeApp {
             return;
         }
         self.applied_theme = Some(self.ws.settings.theme);
-        ctx.set_theme(match self.ws.settings.theme {
-            ThemeChoice::System => egui::ThemePreference::System,
-            ThemeChoice::Light => egui::ThemePreference::Light,
-            ThemeChoice::Dark => egui::ThemePreference::Dark,
-        });
+        ctx.set_theme(theme_preference(self.ws.settings.theme));
     }
 
     fn persist_settings(&mut self) {
@@ -255,58 +437,56 @@ impl NoteStrikeApp {
         if self.ws.current_prompt().is_some() {
             return;
         }
-        let cmd = Modifiers::COMMAND;
-        let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
-        let pressed = |m: Modifiers, k: Key| {
-            ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)))
-        };
-        // Most specific first (Ctrl+Shift+S before Ctrl+S).
-        if pressed(cmd_shift, Key::S) {
+        let pressed = |shortcut: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&shortcut));
+        // egui matches Shift and Alt loosely, so the more specific shortcut
+        // must be tested first (Cmd/Ctrl+Shift+S before Cmd/Ctrl+S).
+        if pressed(keys::SAVE_AS) {
             self.ws.save_active(true, self.dialogs.as_mut());
-        } else if pressed(cmd, Key::S) {
+        } else if pressed(keys::SAVE) {
             self.ws.save_active(false, self.dialogs.as_mut());
         }
-        if pressed(cmd, Key::N) || pressed(cmd, Key::T) {
+        if pressed(keys::NEW_TAB) || pressed(keys::NEW_TAB_ALT) {
             self.ws.new_tab();
             self.focus_editor = true;
         }
-        if pressed(cmd, Key::O) {
+        if pressed(keys::OPEN) {
             self.ws.open_dialog(self.dialogs.as_mut());
         }
-        if (pressed(cmd, Key::W) || pressed(cmd, Key::F4))
+        if (pressed(keys::CLOSE_TAB) || pressed(keys::CLOSE_TAB_ALT))
             && let Some(id) = self.ws.active_tab().map(|t| t.id)
         {
             self.ws.request_close_tab(id);
         }
-        if pressed(cmd, Key::F) {
-            self.ws.show_find(false);
-        }
-        if pressed(cmd, Key::H) {
+        // Replace (Cmd+Option+F on macOS) before Find (Cmd+F).
+        if pressed(keys::REPLACE) {
             self.ws.show_find(true);
         }
-        if pressed(Modifiers::SHIFT, Key::F3) {
+        if pressed(keys::FIND) {
+            self.ws.show_find(false);
+        }
+        if pressed(keys::FIND_PREVIOUS) || keys::FIND_PREVIOUS_ALT.is_some_and(pressed) {
             self.find_and_show(false);
-        } else if pressed(Modifiers::NONE, Key::F3) {
+        } else if pressed(keys::FIND_NEXT) || keys::FIND_NEXT_ALT.is_some_and(pressed) {
             self.find_and_show(true);
         }
-        if pressed(cmd, Key::G) {
+        if pressed(keys::GO_TO_LINE) {
             self.goto_input.clear();
             self.ws.prompts.push_back(Prompt::GoToLine);
         }
-        if pressed(cmd_shift, Key::Tab) {
+        if pressed(keys::PREVIOUS_TAB) {
             self.ws.next_tab(false);
             self.focus_editor = true;
-        } else if pressed(cmd, Key::Tab) {
+        } else if pressed(keys::NEXT_TAB) {
             self.ws.next_tab(true);
             self.focus_editor = true;
         }
-        if pressed(cmd, Key::Plus) || pressed(cmd, Key::Equals) {
+        if pressed(keys::ZOOM_IN) || pressed(keys::ZOOM_IN_ALT) {
             self.zoom(10);
         }
-        if pressed(cmd, Key::Minus) {
+        if pressed(keys::ZOOM_OUT) {
             self.zoom(-10);
         }
-        if pressed(cmd, Key::Num0) {
+        if pressed(keys::ZOOM_RESET) {
             self.zoom(0);
         }
         if self.ws.find.visible && ctx.input(|i| i.key_pressed(Key::Escape)) {
@@ -326,20 +506,20 @@ impl NoteStrikeApp {
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.add(egui::Button::new("New tab").shortcut_text("Ctrl+N")).clicked() {
+                if ui.add(egui::Button::new("New tab").shortcut_text(keys::label(keys::NEW_TAB))).clicked() {
                     self.ws.new_tab();
                     self.focus_editor = true;
                 }
-                if ui.add(egui::Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
+                if ui.add(egui::Button::new("Open…").shortcut_text(keys::label(keys::OPEN))).clicked() {
                     ui.close();
                     self.ws.open_dialog(self.dialogs.as_mut());
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("Save").shortcut_text("Ctrl+S")).clicked() {
+                if ui.add(egui::Button::new("Save").shortcut_text(keys::label(keys::SAVE))).clicked() {
                     ui.close();
                     self.ws.save_active(false, self.dialogs.as_mut());
                 }
-                if ui.add(egui::Button::new("Save as…").shortcut_text("Ctrl+Shift+S")).clicked() {
+                if ui.add(egui::Button::new("Save as…").shortcut_text(keys::label(keys::SAVE_AS))).clicked() {
                     ui.close();
                     self.ws.save_active(true, self.dialogs.as_mut());
                 }
@@ -377,38 +557,38 @@ impl NoteStrikeApp {
                     self.ws.import_notebook(self.dialogs.as_mut());
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("Close tab").shortcut_text("Ctrl+W")).clicked() {
+                if ui.add(egui::Button::new("Close tab").shortcut_text(keys::label(keys::CLOSE_TAB))).clicked() {
                     ui.close();
                     if let Some(id) = self.ws.active_tab().map(|t| t.id) {
                         self.ws.request_close_tab(id);
                     }
                 }
-                if ui.add(egui::Button::new("Exit").shortcut_text("Alt+F4")).clicked() {
+                if ui.add(egui::Button::new(if keys::IS_MAC { "Quit NoteStrike" } else { "Exit" }).shortcut_text(keys::quit_label())).clicked() {
                     ui.close();
                     self.ws.request_quit();
                 }
             });
             ui.menu_button("Edit", |ui| {
-                if ui.add(egui::Button::new("Undo").shortcut_text("Ctrl+Z")).clicked() {
+                if ui.add(egui::Button::new("Undo").shortcut_text(keys::label(keys::UNDO))).clicked() {
                     ui.close();
                     self.undo_redo(ui.ctx(), false);
                 }
-                if ui.add(egui::Button::new("Redo").shortcut_text("Ctrl+Y")).clicked() {
+                if ui.add(egui::Button::new("Redo").shortcut_text(keys::label(keys::REDO))).clicked() {
                     ui.close();
                     self.undo_redo(ui.ctx(), true);
                 }
                 ui.separator();
                 for (label, shortcut, op) in [
-                    ("Cut", "Ctrl+X", ClipboardOp::Cut),
-                    ("Copy", "Ctrl+C", ClipboardOp::Copy),
-                    ("Paste", "Ctrl+V", ClipboardOp::Paste),
+                    ("Cut", keys::CUT, ClipboardOp::Cut),
+                    ("Copy", keys::COPY, ClipboardOp::Copy),
+                    ("Paste", keys::PASTE, ClipboardOp::Paste),
                 ] {
-                    if ui.add(egui::Button::new(label).shortcut_text(shortcut)).clicked() {
+                    if ui.add(egui::Button::new(label).shortcut_text(keys::label(shortcut))).clicked() {
                         ui.close();
                         self.clipboard_request = Some(op);
                     }
                 }
-                if ui.add(egui::Button::new("Select all").shortcut_text("Ctrl+A")).clicked() {
+                if ui.add(egui::Button::new("Select all").shortcut_text(keys::label(keys::SELECT_ALL))).clicked() {
                     ui.close();
                     if let Some(tab) = self.ws.active_tab() {
                         let end = tab.text.chars().count();
@@ -416,23 +596,23 @@ impl NoteStrikeApp {
                     }
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("Find…").shortcut_text("Ctrl+F")).clicked() {
+                if ui.add(egui::Button::new("Find…").shortcut_text(keys::label(keys::FIND))).clicked() {
                     ui.close();
                     self.ws.show_find(false);
                 }
-                if ui.add(egui::Button::new("Find next").shortcut_text("F3")).clicked() {
+                if ui.add(egui::Button::new("Find next").shortcut_text(keys::label(keys::FIND_NEXT))).clicked() {
                     ui.close();
                     self.find_and_show(true);
                 }
-                if ui.add(egui::Button::new("Find previous").shortcut_text("Shift+F3")).clicked() {
+                if ui.add(egui::Button::new("Find previous").shortcut_text(keys::label(keys::FIND_PREVIOUS))).clicked() {
                     ui.close();
                     self.find_and_show(false);
                 }
-                if ui.add(egui::Button::new("Replace…").shortcut_text("Ctrl+H")).clicked() {
+                if ui.add(egui::Button::new("Replace…").shortcut_text(keys::label(keys::REPLACE))).clicked() {
                     ui.close();
                     self.ws.show_find(true);
                 }
-                if ui.add(egui::Button::new("Go to line…").shortcut_text("Ctrl+G")).clicked() {
+                if ui.add(egui::Button::new("Go to line…").shortcut_text(keys::label(keys::GO_TO_LINE))).clicked() {
                     ui.close();
                     self.goto_input.clear();
                     self.ws.prompts.push_back(Prompt::GoToLine);
@@ -448,7 +628,7 @@ impl NoteStrikeApp {
                     .ws
                     .active_tab()
                     .map(|t| (t.eol, t.encoding))
-                    .unwrap_or((LineEnding::CrLf, TextEncoding::Utf8));
+                    .unwrap_or((LineEnding::platform_default(), TextEncoding::Utf8));
                 ui.menu_button("Line endings", |ui| {
                     for eol in LineEnding::ALL {
                         if ui.radio(current_eol == eol, eol.label()).clicked() {
@@ -468,35 +648,37 @@ impl NoteStrikeApp {
             });
             ui.menu_button("View", |ui| {
                 ui.menu_button("Zoom", |ui| {
-                    if ui.add(egui::Button::new("Zoom in").shortcut_text("Ctrl+Plus")).clicked() {
+                    if ui.add(egui::Button::new("Zoom in").shortcut_text(keys::label(keys::ZOOM_IN))).clicked() {
                         self.zoom(10);
                     }
-                    if ui.add(egui::Button::new("Zoom out").shortcut_text("Ctrl+Minus")).clicked() {
+                    if ui.add(egui::Button::new("Zoom out").shortcut_text(keys::label(keys::ZOOM_OUT))).clicked() {
                         self.zoom(-10);
                     }
-                    if ui.add(egui::Button::new("Restore default zoom").shortcut_text("Ctrl+0")).clicked() {
+                    if ui.add(egui::Button::new("Restore default zoom").shortcut_text(keys::label(keys::ZOOM_RESET))).clicked() {
                         self.zoom(0);
                     }
                 });
                 ui.checkbox(&mut self.ws.settings.status_bar, "Status bar");
-                ui.separator();
-                ui.label(RichText::new("Theme").small().weak());
-                for (choice, label) in [
-                    (ThemeChoice::System, "Use system setting"),
-                    (ThemeChoice::Light, "Light"),
-                    (ThemeChoice::Dark, "Dark"),
-                ] {
-                    if ui.radio(self.ws.settings.theme == choice, label).clicked() {
-                        self.ws.settings.theme = choice;
+                ui.menu_button("Theme", |ui| {
+                    for (choice, label) in [
+                        (ThemeChoice::System, SYSTEM_THEME_LABEL),
+                        (ThemeChoice::Light, "Light"),
+                        (ThemeChoice::Dark, "Dark"),
+                    ] {
+                        if ui.radio(self.ws.settings.theme == choice, label).clicked() {
+                            // Applied on the next frame and saved to settings.json.
+                            self.ws.settings.theme = choice;
+                            ui.close();
+                        }
                     }
-                }
+                });
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("Keyboard shortcuts").clicked() {
                     ui.close();
                     self.ws.prompts.push_back(Prompt::Message {
                         title: "Keyboard shortcuts".into(),
-                        body: SHORTCUTS_HELP.into(),
+                        body: keys::help_text(),
                     });
                 }
                 if ui.button("About NoteStrike").clicked() {
@@ -584,7 +766,10 @@ impl NoteStrikeApp {
                                             .frame_when_inactive(false)
                                             .small(),
                                     )
-                                    .on_hover_text("Close tab (Ctrl+W)");
+                                    .on_hover_text(format!(
+                                        "Close tab ({})",
+                                        keys::label(keys::CLOSE_TAB)
+                                    ));
                                 let close_name = format!("Close {title}");
                                 close_btn.widget_info(|| {
                                     egui::WidgetInfo::labeled(
@@ -604,7 +789,7 @@ impl NoteStrikeApp {
                             egui::Button::new(RichText::new("+").size(16.0))
                                 .frame_when_inactive(false),
                         )
-                        .on_hover_text("New tab (Ctrl+N)");
+                        .on_hover_text(format!("New tab ({})", keys::label(keys::NEW_TAB)));
                     plus.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "New tab")
                     });
@@ -650,18 +835,21 @@ impl NoteStrikeApp {
             if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                 let backwards = ui.input(|i| i.modifiers.shift);
                 self.ws.find_step(!backwards);
-                response.request_focus();
                 self.scroll_to_selection = true;
             }
             if ui
-                .button("↑")
+                .button(FIND_PREVIOUS_ICON)
                 .on_hover_text("Find previous (Shift+F3)")
                 .clicked()
             {
                 self.ws.find_step(false);
                 self.scroll_to_selection = true;
             }
-            if ui.button("↓").on_hover_text("Find next (F3)").clicked() {
+            if ui
+                .button(FIND_NEXT_ICON)
+                .on_hover_text("Find next (F3)")
+                .clicked()
+            {
                 self.ws.find_step(true);
                 self.scroll_to_selection = true;
             }
@@ -719,15 +907,12 @@ impl NoteStrikeApp {
             return;
         };
         let id = tab.id;
-        let warn = if ui.visuals().dark_mode {
-            Color32::from_rgb(250, 204, 21)
-        } else {
-            Color32::from_rgb(146, 64, 14)
-        };
+        let p = palette::for_dark(ui.visuals().dark_mode);
+        let (warn, notice_text) = (p.warn_icon, p.notice_text);
         let mut action: Option<NoticeAction> = None;
         let notice = |ui: &mut egui::Ui, text: String| {
             ui.label(RichText::new("⚠").color(warn));
-            ui.label(text);
+            ui.label(RichText::new(text).color(notice_text));
         };
         match tab.external {
             ExternalState::ChangedOnDisk => {
@@ -823,6 +1008,9 @@ impl NoteStrikeApp {
         if let Some((target, range)) = self.ws.selection_request.take()
             && target == tab_id
         {
+            // egui collapses the selection of an unfocused TextEdit, so focus
+            // the editor first; the match is then shown selected.
+            ctx.memory_mut(|m| m.request_focus(id));
             let mut state = TextEditState::load(&ctx, id).unwrap_or_default();
             state.cursor.set_char_range(Some(CCursorRange::two(
                 CCursor::new(range.start),
@@ -833,7 +1021,9 @@ impl NoteStrikeApp {
             scroll_now = true;
         }
 
-        let text_color = ui.visuals().text_color();
+        let text_color = palette::for_dark(ui.visuals().dark_mode)
+            .editor_text
+            .unwrap_or_else(|| ui.visuals().text_color());
         let mut layouter = |ui: &egui::Ui, buf: &dyn TextBuffer, wrap_width: f32| {
             let job = LayoutJob::simple(
                 buf.as_str().to_owned(),
@@ -945,7 +1135,7 @@ impl NoteStrikeApp {
             ui.separator();
             if width > 560.0 {
                 ui.label(format!("{}%", self.ws.settings.zoom_percent))
-                    .on_hover_text("Zoom (Ctrl+Plus / Ctrl+Minus / Ctrl+0)");
+                    .on_hover_text(format!("Zoom ({} / {} / {})", keys::label(keys::ZOOM_IN), keys::label(keys::ZOOM_OUT), keys::label(keys::ZOOM_RESET)));
                 ui.separator();
             }
             if width > 700.0 {
@@ -974,12 +1164,11 @@ impl NoteStrikeApp {
         let mut answer: Option<Answer> = None;
         let modal = egui::Modal::new(egui::Id::new("notestrike-prompt")).show(ctx, |ui| {
             ui.set_max_width(460.0);
-            let buttons: Vec<(&str, Answer)>;
-            match &prompt {
+            let buttons: Vec<(&str, Answer)> = match &prompt {
                 Prompt::UnsavedTab { tab } => {
                     ui.heading("Unsaved changes");
                     ui.label(format!("Do you want to save changes to {}?", title_of(&self.ws, *tab)));
-                    buttons = vec![("Save", Answer::Save), ("Don't save", Answer::DontSave), ("Cancel", Answer::Cancel)];
+                    vec![("Save", Answer::Save), ("Don't save", Answer::DontSave), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::UnsavedOnQuit { tabs } => {
                     ui.heading("Unsaved changes");
@@ -987,7 +1176,7 @@ impl NoteStrikeApp {
                     for id in tabs {
                         ui.label(format!("  •  {}", title_of(&self.ws, *id)));
                     }
-                    buttons = vec![("Save all", Answer::SaveAll), ("Don't save", Answer::DiscardAll), ("Cancel", Answer::Cancel)];
+                    vec![("Save all", Answer::SaveAll), ("Don't save", Answer::DiscardAll), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::ChangedOnDisk { save } => {
                     ui.heading("File changed on disk");
@@ -995,7 +1184,7 @@ impl NoteStrikeApp {
                         "{} was changed or removed by another program after you opened it. Overwrite it with your version, save your version under a new name, or cancel.",
                         title_of(&self.ws, save.tab)
                     ));
-                    buttons = vec![("Overwrite", Answer::Overwrite), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                    vec![("Overwrite", Answer::Overwrite), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::LossySave { save } => {
                     let tab = self.ws.tab(save.tab);
@@ -1006,12 +1195,12 @@ impl NoteStrikeApp {
                         tab.map_or(0, |t| t.invalid_sequences),
                         tab.map_or("UTF-8", |t| t.encoding.label())
                     ));
-                    buttons = vec![("Save anyway", Answer::SaveAnyway), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                    vec![("Save anyway", Answer::SaveAnyway), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::Unrepresentable { details, .. } => {
                     ui.heading("Characters cannot be saved");
                     ui.label(format!("{details}. Nothing was written."));
-                    buttons = vec![("Save as UTF-8", Answer::UseUtf8), ("Cancel", Answer::Cancel)];
+                    vec![("Save as UTF-8", Answer::UseUtf8), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::ReadOnly { save } => {
                     ui.heading("Read-only file");
@@ -1019,7 +1208,7 @@ impl NoteStrikeApp {
                         "{} is read-only. Save your changes under a new name?",
                         title_of(&self.ws, save.tab)
                     ));
-                    buttons = vec![("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                    vec![("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::LargeFile { path, size } => {
                     ui.heading("Large file");
@@ -1028,7 +1217,7 @@ impl NoteStrikeApp {
                         path.display(),
                         human_size(*size)
                     ));
-                    buttons = vec![("Open anyway", Answer::OpenAnyway), ("Cancel", Answer::Cancel)];
+                    vec![("Open anyway", Answer::OpenAnyway), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::ConfirmReload { tab, encoding } => {
                     ui.heading("Discard unsaved changes?");
@@ -1037,7 +1226,7 @@ impl NoteStrikeApp {
                         title_of(&self.ws, *tab),
                         encoding.map(|e| format!(" as {}", e.label())).unwrap_or_default()
                     ));
-                    buttons = vec![("Reload", Answer::Reload), ("Cancel", Answer::Cancel)];
+                    vec![("Reload", Answer::Reload), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::Recovery { orphans } => {
                     ui.heading("Recover unsaved work");
@@ -1052,7 +1241,7 @@ impl NoteStrikeApp {
                                 .on_hover_text(&location);
                         }
                     });
-                    buttons = vec![("Restore", Answer::Restore), ("Discard…", Answer::Discard), ("Later", Answer::Later)];
+                    vec![("Restore", Answer::Restore), ("Discard…", Answer::Discard), ("Later", Answer::Later)]
                 }
                 Prompt::ConfirmDiscardRecovery { orphans } => {
                     ui.heading("Discard recovered text?");
@@ -1061,7 +1250,7 @@ impl NoteStrikeApp {
                         orphans.len(),
                         if orphans.len() == 1 { "y" } else { "ies" }
                     ));
-                    buttons = vec![("Discard", Answer::Discard), ("Back", Answer::Cancel)];
+                    vec![("Discard", Answer::Discard), ("Back", Answer::Cancel)]
                 }
                 Prompt::GoToLine => {
                     ui.heading("Go to line");
@@ -1078,14 +1267,14 @@ impl NoteStrikeApp {
                     if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) && let Ok(n) = parsed {
                         answer = Some(Answer::GoTo(n));
                     }
-                    buttons = vec![("Go to", Answer::GoTo(parsed.unwrap_or(0))), ("Cancel", Answer::Cancel)];
+                    vec![("Go to", Answer::GoTo(parsed.unwrap_or(0))), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::Message { title, body } => {
                     ui.heading(title);
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                         ui.label(body);
                     });
-                    buttons = vec![("OK", Answer::Ok)];
+                    vec![("OK", Answer::Ok)]
                 }
                 Prompt::About => {
                     ui.vertical_centered(|ui| {
@@ -1097,15 +1286,28 @@ impl NoteStrikeApp {
                         ui.add_space(8.0);
                         ui.label(RichText::new("Part of the PWDS Strike suite by").weak());
                         if let Some(logo) = &self.pwds_logo {
-                            ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(120.0, 52.0)).alt_text("ProWebDevSolutions logo"));
+                            // The official PWDS mark is black; in dark mode it sits on a
+                            // light plate so it stays visible.
+                            let plate = if ui.visuals().dark_mode {
+                                Color32::from_rgb(243, 243, 243)
+                            } else {
+                                Color32::TRANSPARENT
+                            };
+                            let (rect, response) =
+                                ui.allocate_exact_size(egui::vec2(140.0, 60.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 6.0, plate);
+                            egui::Image::new(logo).paint_at(ui, rect.shrink2(egui::vec2(10.0, 4.0)));
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Image, true, "ProWebDevSolutions logo")
+                            });
                         }
                         ui.hyperlink_to("ProWebDevSolutions", "https://prowebdevsolutions.com");
                         ui.add_space(8.0);
                         ui.label(RichText::new("Built with Rust, egui/eframe, and rfd (MIT / Apache-2.0).").small().weak());
                     });
-                    buttons = vec![("OK", Answer::Ok)];
+                    vec![("OK", Answer::Ok)]
                 }
-            }
+            };
             ui.add_space(12.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Right-to-left: show buttons in reverse so the first one is leftmost.
@@ -1215,7 +1417,7 @@ impl eframe::App for NoteStrikeApp {
             self.ws.open_paths(&dropped);
         }
 
-        // Window close button / Alt+F4: ask about unsaved tabs first.
+        // Window close button / Alt+F4 / Cmd+Q (macos_menu): ask about unsaved tabs first.
         if ctx.input(|i| i.viewport().close_requested()) && !self.closing {
             self.ws.request_quit();
             if !self.ws.quit_approved() {
@@ -1267,7 +1469,7 @@ impl eframe::App for NoteStrikeApp {
             egui::Panel::top("notestrike-notices")
                 .frame(
                     egui::Frame::NONE
-                        .fill(ui.visuals().faint_bg_color)
+                        .fill(palette::for_dark(ui.visuals().dark_mode).notice_bg)
                         .inner_margin(egui::Margin::symmetric(10, 6)),
                 )
                 .show(ui, |ui| self.notices(ui));
@@ -1292,43 +1494,123 @@ impl eframe::App for NoteStrikeApp {
     }
 }
 
-const SHORTCUTS_HELP: &str = "Ctrl+N / Ctrl+T\tNew tab\n\
-Ctrl+O\tOpen\n\
-Ctrl+S\tSave\n\
-Ctrl+Shift+S\tSave as\n\
-Ctrl+W\tClose tab\n\
-Ctrl+Tab / Ctrl+Shift+Tab\tNext / previous tab\n\
-Ctrl+Z / Ctrl+Y\tUndo / redo\n\
-Ctrl+X / Ctrl+C / Ctrl+V\tCut / copy / paste\n\
-Ctrl+A\tSelect all\n\
-Ctrl+F\tFind\n\
-F3 / Shift+F3\tFind next / previous\n\
-Ctrl+H\tReplace\n\
-Ctrl+G\tGo to line\n\
-Ctrl+Plus / Ctrl+Minus / Ctrl+0\tZoom in / out / reset\n\
-Esc\tClose the find bar or a dialog\n\
-Alt+F4\tExit";
+/// Light/dark preference of a Linux desktop (GNOME and GTK-based desktops):
+/// `GTK_THEME`, then the `color-scheme` and `gtk-theme` GSettings keys.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+mod desktop_theme {
+    use eframe::egui::Theme;
 
-/// Prefer the Windows UI and monospace fonts when installed (loaded from the
-/// user's own system at runtime, never bundled); egui's built-in fonts stay
-/// as fallbacks for missing glyphs.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    pub fn detect() -> Option<Theme> {
+        if let Some(name) = std::env::var_os("GTK_THEME") {
+            return Some(from_gtk_theme_name(&name.to_string_lossy()));
+        }
+        let gsettings = |key: &str| {
+            std::process::Command::new("gsettings")
+                .args(["get", "org.gnome.desktop.interface", key])
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        };
+        if let Some(theme) = gsettings("color-scheme").and_then(|v| from_color_scheme(&v)) {
+            return Some(theme);
+        }
+        gsettings("gtk-theme").map(|v| from_gtk_theme_name(&v))
+    }
+
+    /// `'prefer-dark'` / `'prefer-light'`; `'default'` means "not set".
+    pub fn from_color_scheme(value: &str) -> Option<Theme> {
+        match value.trim().trim_matches('\'') {
+            "prefer-dark" => Some(Theme::Dark),
+            "prefer-light" => Some(Theme::Light),
+            _ => None,
+        }
+    }
+
+    /// Theme names such as `Adwaita:dark`, `'Yaru-dark'` or `Breeze`.
+    pub fn from_gtk_theme_name(name: &str) -> Theme {
+        if name.to_ascii_lowercase().contains("dark") {
+            Theme::Dark
+        } else {
+            Theme::Light
+        }
+    }
+}
+
+/// Find bar arrows. These come from egui's built-in icon font, so they render
+/// on every OS: macOS uses only egui's fonts, which have no U+2191/U+2193
+/// arrows (CI captures showed empty boxes there).
+const FIND_PREVIOUS_ICON: &str = "⏶";
+const FIND_NEXT_ICON: &str = "⏷";
+
+/// Label of View > Theme > System for this platform.
+const SYSTEM_THEME_LABEL: &str = if cfg!(windows) {
+    "System (follow Windows)"
+} else if cfg!(target_os = "macos") {
+    "System (follow macOS)"
+} else {
+    "System (follow desktop)"
+};
+
+type FontCandidates = [(&'static str, &'static [&'static str], egui::FontFamily); 2];
+
+/// Segoe UI and Consolas (or Cascadia Mono), installed with Windows.
+#[cfg(windows)]
+const SYSTEM_FONTS: FontCandidates = [
+    (
+        "system-ui",
+        &["C:\\Windows\\Fonts\\segoeui.ttf"],
+        egui::FontFamily::Proportional,
+    ),
+    (
+        "system-mono",
+        &[
+            "C:\\Windows\\Fonts\\consola.ttf",
+            "C:\\Windows\\Fonts\\CascadiaMono.ttf",
+        ],
+        egui::FontFamily::Monospace,
+    ),
+];
+
+/// DejaVu, installed by most Linux desktops (Debian/Ubuntu and Fedora paths).
+#[cfg(all(unix, not(target_os = "macos")))]
+const SYSTEM_FONTS: FontCandidates = [
+    (
+        "system-ui",
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ],
+        egui::FontFamily::Proportional,
+    ),
+    (
+        "system-mono",
+        &[
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        ],
+        egui::FontFamily::Monospace,
+    ),
+];
+
+/// macOS system fonts ship as collections and variable fonts; egui's built-in
+/// fonts are used there.
+#[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
+const SYSTEM_FONTS: FontCandidates = [
+    ("system-ui", &[], egui::FontFamily::Proportional),
+    ("system-mono", &[], egui::FontFamily::Monospace),
+];
+
+/// Prefer the platform's UI and monospace fonts when installed (loaded from
+/// the user's own system at runtime, never bundled); egui's built-in fonts
+/// stay as fallbacks for missing glyphs.
 fn install_system_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let candidates: [(&str, &[&str], egui::FontFamily); 2] = [
-        (
-            "system-ui",
-            &["C:\\Windows\\Fonts\\segoeui.ttf"],
-            egui::FontFamily::Proportional,
-        ),
-        (
-            "system-mono",
-            &[
-                "C:\\Windows\\Fonts\\consola.ttf",
-                "C:\\Windows\\Fonts\\CascadiaMono.ttf",
-            ],
-            egui::FontFamily::Monospace,
-        ),
-    ];
+    let candidates = SYSTEM_FONTS;
     let mut changed = false;
     for (name, paths, family) in candidates {
         if let Some(bytes) = paths.iter().find_map(|p| std::fs::read(p).ok()) {
@@ -1383,7 +1665,9 @@ fn write_capture_png(path: &Path, screenshot: &egui::ColorImage) -> Result<(), S
     let [width, height] = screenshot.size;
     let mut pixels = Vec::with_capacity(width * height * 4);
     for color in &screenshot.pixels {
-        pixels.extend_from_slice(&color.to_array());
+        // The window is opaque; drop the alpha egui reports for translucent fills.
+        let [r, g, b, _] = color.to_array();
+        pixels.extend_from_slice(&[r, g, b, 255]);
     }
     let image = image::RgbaImage::from_raw(width as u32, height as u32, pixels)
         .ok_or("Could not construct screenshot image")?;
@@ -1409,6 +1693,7 @@ mod tests {
     use super::*;
     use crate::encoding::Unrepresentable;
     use crate::workspace::PendingSave;
+    use eframe::egui::Modifiers;
 
     #[derive(Default)]
     struct Scripted {
@@ -1609,5 +1894,267 @@ mod tests {
         }
         assert!(app.ws.find_step(true));
         assert_eq!(app.ws.selection, (0, 5));
+    }
+
+    fn themed_frame(app: &mut NoteStrikeApp, ctx: &egui::Context, system: Option<egui::Theme>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            system_theme: system,
+            ..Default::default()
+        };
+        let mut eframe_frame = eframe::Frame::_new_kittest();
+        ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut eframe_frame))
+            .textures_delta
+            .clear();
+    }
+
+    #[test]
+    fn system_theme_follows_the_os_and_explicit_choices_override_it() {
+        let ctx = egui::Context::default();
+        let mut app = app_with(Scripted::default());
+        assert_eq!(
+            app.ws.settings.theme,
+            ThemeChoice::System,
+            "default is System"
+        );
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Dark));
+        assert_eq!(
+            ctx.theme(),
+            egui::Theme::Dark,
+            "System tracks an OS change live"
+        );
+        // When the OS reports nothing, egui's fallback (dark) is used.
+        themed_frame(&mut app, &ctx, None);
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+
+        app.ws.settings.theme = ThemeChoice::Light;
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Dark));
+        assert_eq!(
+            ctx.theme(),
+            egui::Theme::Light,
+            "explicit Light ignores a dark OS"
+        );
+        app.ws.settings.theme = ThemeChoice::Dark;
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_eq!(
+            ctx.theme(),
+            egui::Theme::Dark,
+            "switching applies on the next frame"
+        );
+        assert_eq!(
+            theme_preference(ThemeChoice::System),
+            egui::ThemePreference::System
+        );
+    }
+
+    #[test]
+    fn theme_choice_persists_across_restarts() {
+        let dir = std::env::temp_dir().join(format!(
+            "notestrike-theme-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let settings_path = dir.join("settings.json");
+        let ctx = egui::Context::default();
+        let mut app = NoteStrikeApp::new(
+            Workspace::new(None, Settings::default()),
+            Box::new(Scripted::default()),
+            Some(settings_path.clone()),
+        );
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        app.ws.settings.theme = ThemeChoice::Dark;
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_eq!(Settings::load(&settings_path).theme, ThemeChoice::Dark);
+
+        // "Restart": a new app and context built from the saved settings.
+        let ctx = egui::Context::default();
+        let mut restarted = NoteStrikeApp::new(
+            Workspace::new(None, Settings::load(&settings_path)),
+            Box::new(Scripted::default()),
+            Some(settings_path.clone()),
+        );
+        themed_frame(&mut restarted, &ctx, Some(egui::Theme::Light));
+        themed_frame(&mut restarted, &ctx, Some(egui::Theme::Light));
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+
+        restarted.ws.settings.theme = ThemeChoice::System;
+        themed_frame(&mut restarted, &ctx, Some(egui::Theme::Light));
+        assert_eq!(Settings::load(&settings_path).theme, ThemeChoice::System);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn luminance(c: Color32) -> f64 {
+        let lin = |v: u8| {
+            let s = f64::from(v) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// Composite a premultiplied, possibly translucent colour over an opaque one.
+    fn over(top: Color32, bottom: Color32) -> Color32 {
+        let k = 1.0 - f32::from(top.a()) / 255.0;
+        let mix = |t: u8, b: u8| (f32::from(t) + f32::from(b) * k).round().min(255.0) as u8;
+        Color32::from_rgb(
+            mix(top.r(), bottom.r()),
+            mix(top.g(), bottom.g()),
+            mix(top.b(), bottom.b()),
+        )
+    }
+
+    #[test]
+    fn both_themes_meet_wcag_aa_contrast() {
+        let ctx = egui::Context::default();
+        let mut app = app_with(Scripted::default());
+        themed_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let v = ctx.style_of(theme).visuals.clone();
+            let p = palette::for_theme(theme);
+            let text = v.text_color();
+            let editor_text = p.editor_text.unwrap_or(text);
+            let text_pairs = [
+                ("body text on panel", text, v.panel_fill),
+                ("body text in dialogs", text, v.window_fill),
+                ("editor text", editor_text, v.extreme_bg_color),
+                (
+                    "selected editor text",
+                    editor_text,
+                    over(v.selection.bg_fill, v.extreme_bg_color),
+                ),
+                ("weak text on panel", v.weak_text_color(), v.panel_fill),
+                ("weak text in dialogs", v.weak_text_color(), v.window_fill),
+                ("warning text on panel", v.warn_fg_color, v.panel_fill),
+                ("warning text in dialogs", v.warn_fg_color, v.window_fill),
+                ("error text in dialogs", v.error_fg_color, v.window_fill),
+                ("links in About", v.hyperlink_color, v.window_fill),
+                ("banner text", p.notice_text, p.notice_bg),
+                (
+                    "button text",
+                    v.widgets.inactive.fg_stroke.color,
+                    v.widgets.inactive.weak_bg_fill,
+                ),
+                (
+                    "hovered button text",
+                    v.widgets.hovered.fg_stroke.color,
+                    v.widgets.hovered.weak_bg_fill,
+                ),
+            ];
+            for (what, fg, bg) in text_pairs {
+                let ratio = contrast(fg, bg);
+                assert!(ratio >= 4.5, "{theme:?}: {what} contrast {ratio:.2} < 4.5");
+            }
+            let ui_pairs = [("banner warning icon", p.warn_icon, p.notice_bg)];
+            for (what, fg, bg) in ui_pairs {
+                let ratio = contrast(fg, bg);
+                assert!(ratio >= 3.0, "{theme:?}: {what} contrast {ratio:.2} < 3");
+            }
+        }
+    }
+
+    #[test]
+    fn found_match_stays_selected_in_the_editor() {
+        let mut app = app_with(Scripted::default());
+        let ctx = egui::Context::default();
+        app.ws.active_tab_mut().unwrap().text = "one two three two".into();
+        frame(&mut app, &ctx, vec![], false);
+        app.ws.find.needle = "two".into();
+        assert!(app.ws.find_step(true));
+        frame(&mut app, &ctx, vec![], false);
+        frame(&mut app, &ctx, vec![], false);
+        let id = NoteStrikeApp::editor_id(app.ws.active_tab().unwrap().id);
+        let range = TextEditState::load(&ctx, id)
+            .unwrap()
+            .cursor
+            .char_range()
+            .unwrap();
+        let (a, b) = (range.primary.index, range.secondary.index);
+        assert_eq!((usize::from(a.min(b)), usize::from(a.max(b))), (4, 7));
+        assert_eq!(app.ws.selection, (4, 7));
+    }
+
+    fn key_event(shortcut: KeyboardShortcut) -> egui::Event {
+        egui::Event::Key {
+            key: shortcut.logical_key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: shortcut.modifiers,
+        }
+    }
+
+    #[test]
+    fn shortcut_labels_follow_the_platform() {
+        let save = keys::label(keys::SAVE);
+        if cfg!(target_os = "macos") {
+            assert_eq!(save, "Cmd+S");
+            assert_eq!(keys::label(keys::REDO), "Shift+Cmd+Z");
+            assert_ne!(
+                keys::REPLACE,
+                KeyboardShortcut::new(Modifiers::COMMAND, Key::H)
+            );
+            assert_eq!(keys::quit_label(), "Cmd+Q");
+        } else {
+            assert_eq!(save, "Ctrl+S");
+            assert_eq!(keys::label(keys::SAVE_AS), "Ctrl+Shift+S");
+            assert_eq!(keys::label(keys::REPLACE), "Ctrl+H");
+            assert_eq!(keys::quit_label(), "Alt+F4");
+        }
+        assert_eq!(keys::label(keys::NEXT_TAB), "Ctrl+Tab");
+        let help = keys::help_text();
+        assert!(help.contains(&format!("{save}	Save")), "{help}");
+        assert_eq!(help.contains("Cmd"), cfg!(target_os = "macos"), "{help}");
+    }
+
+    #[test]
+    fn replace_shortcut_opens_replace_not_plain_find() {
+        let mut app = app_with(Scripted::default());
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, vec![key_event(keys::REPLACE)], false);
+        assert!(app.ws.find.visible && app.ws.find.replace_visible);
+        app.ws.find.visible = false;
+        frame(&mut app, &ctx, vec![key_event(keys::FIND)], false);
+        assert!(app.ws.find.visible && !app.ws.find.replace_visible);
+        frame(&mut app, &ctx, vec![key_event(keys::GO_TO_LINE)], false);
+        assert!(matches!(app.ws.current_prompt(), Some(Prompt::GoToLine)));
+    }
+
+    #[test]
+    fn linux_desktop_theme_values_are_parsed() {
+        use egui::Theme;
+        assert_eq!(
+            desktop_theme::from_color_scheme("'prefer-dark'\n"),
+            Some(Theme::Dark)
+        );
+        assert_eq!(
+            desktop_theme::from_color_scheme("'prefer-light'"),
+            Some(Theme::Light)
+        );
+        assert_eq!(desktop_theme::from_color_scheme("'default'"), None);
+        assert_eq!(
+            desktop_theme::from_gtk_theme_name("Adwaita:dark"),
+            Theme::Dark
+        );
+        assert_eq!(
+            desktop_theme::from_gtk_theme_name("'Yaru-dark'\n"),
+            Theme::Dark
+        );
+        assert_eq!(
+            desktop_theme::from_gtk_theme_name("'Adwaita'"),
+            Theme::Light
+        );
     }
 }

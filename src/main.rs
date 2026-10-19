@@ -3,6 +3,8 @@
 //! Usage: `notestrike [FILE ...]` opens each file in a tab.
 //! `notestrike --capture OUT.png [WIDTH HEIGHT] [FILE ...]` renders the real
 //! window once, writes it to OUT.png, and exits (documentation screenshots).
+//! In capture mode `--find TEXT REPLACEMENT` or `--about` (after the size)
+//! opens the find/replace bar or the About dialog first.
 
 // No console window for the release build on Windows.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
@@ -12,7 +14,8 @@ use std::process::ExitCode;
 
 use eframe::egui;
 use notestrike::native_ui::{self, NativeDialogs, NoteStrikeApp};
-use notestrike::recovery::{self, RecoveryStore};
+use notestrike::paths::AppDirs;
+use notestrike::recovery::RecoveryStore;
 use notestrike::workspace::{Settings, Workspace};
 
 fn main() -> ExitCode {
@@ -37,19 +40,48 @@ fn main() -> ExitCode {
             args.drain(..2);
         }
     }
+    // Capture-only scene setup, so documentation screenshots can show the
+    // find/replace bar or the About dialog of the real window:
+    // `--find TEXT REPLACEMENT` or `--about`, right after the size.
+    let mut find: Option<(String, String)> = None;
+    let mut about = false;
+    if capture.is_some() {
+        if args.first().is_some_and(|a| a == "--find") && args.len() >= 3 {
+            find = Some((args[1].clone(), args[2].clone()));
+            args.drain(..3);
+        } else if args.first().is_some_and(|a| a == "--about") {
+            about = true;
+            args.drain(..1);
+        }
+    }
     let files: Vec<PathBuf> = args.iter().map(PathBuf::from).collect();
 
-    let data_dir = recovery::data_dir();
-    let recovery = data_dir
+    let dirs = AppDirs::current();
+    if let Some(dirs) = &dirs
+        && let Err(error) = dirs.migrate()
+    {
+        eprintln!("NoteStrike: could not copy settings from an earlier version: {error}");
+    }
+    let recovery = dirs
         .as_ref()
-        .and_then(|dir| RecoveryStore::open(&dir.join("recovery")).ok());
-    let settings_path = data_dir.as_ref().map(|dir| dir.join("settings.json"));
+        .and_then(|dirs| RecoveryStore::open(&dirs.recovery_dir).ok());
+    let settings_path = dirs.map(|dirs| dirs.settings_file);
     let settings = settings_path
         .as_deref()
         .map(Settings::load)
         .unwrap_or_default();
     let mut ws = Workspace::new(recovery, settings);
     ws.open_paths(&files);
+    if let Some((needle, replacement)) = find {
+        ws.find.needle = needle;
+        ws.find.replacement = replacement;
+        ws.show_find(true);
+        ws.find.focus_request = false;
+        ws.find_step(true);
+    }
+    if about {
+        ws.prompts.push_back(notestrike::workspace::Prompt::About);
+    }
 
     let mut app = NoteStrikeApp::new(ws, Box::new(NativeDialogs), settings_path);
     let capture_result = capture.map(|path| app.capture_once(path));
@@ -63,15 +95,32 @@ fn main() -> ExitCode {
     if let Some(icon) = native_ui::window_icon() {
         viewport = viewport.with_icon(icon);
     }
-    let options = eframe::NativeOptions {
+    #[allow(unused_mut)] // only changed on macOS
+    let mut options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
+    // winit's default macOS menu quits through `terminate:`, which ends the
+    // process without asking about unsaved tabs. NoteStrike installs its own
+    // app menu whose Quit closes the window through the normal close request.
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        options.event_loop_builder = Some(Box::new(
+            |builder: &mut eframe::EventLoopBuilder<eframe::UserEvent>| {
+                builder.with_default_menu(false);
+            },
+        ));
+    }
     match eframe::run_native(
         "NoteStrike",
         options,
-        Box::new(move |_cc| Ok(Box::new(app))),
+        Box::new(move |_cc| {
+            #[cfg(target_os = "macos")]
+            notestrike::macos_menu::install();
+            Ok(Box::new(app))
+        }),
     ) {
         Ok(()) => match capture_result {
             None => ExitCode::SUCCESS,

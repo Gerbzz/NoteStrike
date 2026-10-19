@@ -500,3 +500,67 @@ fn import_dialog_cancellation() {
     ws.import_notebook(&mut script);
     assert_eq!(ws.status, "Import cancelled.");
 }
+
+#[test]
+fn settings_round_trip_and_fall_back_to_defaults() {
+    use notestrike::workspace::ThemeChoice;
+    let dir = TempDir::new("settings");
+    let path = dir.join("settings.json");
+    assert_eq!(Settings::load(&path), Settings::default(), "missing file");
+    assert_eq!(Settings::default().theme, ThemeChoice::System);
+    for theme in [ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::System] {
+        let settings = Settings {
+            theme,
+            word_wrap: false,
+            zoom_percent: 150,
+            status_bar: false,
+        };
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), settings);
+    }
+    fs::write(&path, b"{not json").unwrap();
+    assert_eq!(Settings::load(&path), Settings::default(), "corrupt file");
+    fs::write(&path, br#"{"theme":"purple","zoom_percent":9000}"#).unwrap();
+    let odd = Settings::load(&path);
+    assert_eq!(odd.theme, ThemeChoice::System);
+    assert_eq!(odd.zoom_percent, Settings::ZOOM_MAX);
+}
+
+#[test]
+fn new_tabs_use_the_platform_line_ending_and_files_keep_theirs() {
+    let expected = if cfg!(windows) {
+        LineEnding::CrLf
+    } else {
+        LineEnding::Lf
+    };
+    assert_eq!(LineEnding::platform_default(), expected);
+    let dir = TempDir::new("ws-platform-eol");
+    let mut ws = ws();
+    let mut script = Script::default();
+    ws.new_tab();
+    let id = ws.active_tab().unwrap().id;
+    assert_eq!(ws.tab(id).unwrap().eol, expected);
+
+    // An existing file keeps its own convention on every OS.
+    for (name, bytes, eol) in [
+        ("crlf.txt", &b"a\r\nb\r\n"[..], LineEnding::CrLf),
+        ("lf.txt", &b"a\nb\n"[..], LineEnding::Lf),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, bytes).unwrap();
+        ws.open_paths(std::slice::from_ref(&path));
+        let id = ws.active_tab().unwrap().id;
+        assert_eq!(ws.tab(id).unwrap().eol, eol, "{name}");
+        ws.active_tab_mut().unwrap().text.push_str("c\n");
+        ws.text_edited(id);
+        ws.save_tab(id, &mut script);
+        let saved = fs::read(&path).unwrap();
+        let mut want = bytes.to_vec();
+        want.extend_from_slice(if eol == LineEnding::CrLf {
+            b"c\r\n"
+        } else {
+            b"c\n"
+        });
+        assert_eq!(saved, want, "{name}");
+    }
+}

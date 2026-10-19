@@ -5,7 +5,7 @@
 mod common;
 
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use common::{Script, TempDir};
 use notestrike::recovery::RecoveryStore;
@@ -233,6 +233,25 @@ fn a_running_session_is_not_mistaken_for_a_crash() {
 
 const CHILD_ENV: &str = "NOTESTRIKE_CRASH_CHILD_DIR";
 
+/// `std::process::abort` ends the process with SIGABRT on Unix and with
+/// `__fastfail` (STATUS_STACK_BUFFER_OVERRUN, 0xC0000409) on Windows. A
+/// normal exit or a panic (exit code 101) means the crash never happened.
+fn aborted(status: &std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(6)
+    }
+    #[cfg(windows)]
+    {
+        status.code() == Some(0xC000_0409_u32 as i32)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        !status.success()
+    }
+}
+
 /// Helper run in a child process by `recovery_after_real_process_abort`.
 #[test]
 #[ignore = "helper process for recovery_after_real_process_abort"]
@@ -252,7 +271,9 @@ fn crash_child() {
 #[test]
 fn recovery_after_real_process_abort() {
     let data = TempDir::new("recovery-abort");
-    let status = Command::new(std::env::current_exe().unwrap())
+    // The test binary re-runs itself with only the ignored helper selected.
+    // `current_exe` is the test binary on every OS (target/debug/deps/...).
+    let output = Command::new(std::env::current_exe().unwrap())
         .args([
             "crash_child",
             "--exact",
@@ -261,9 +282,17 @@ fn recovery_after_real_process_abort() {
             "--test-threads=1",
         ])
         .env(CHILD_ENV, data.path())
-        .status()
+        .env_remove("RUST_TEST_THREADS")
+        .stdin(Stdio::null())
+        .output()
         .unwrap();
-    assert!(!status.success(), "child must have aborted");
+    let status = output.status;
+    let details = format!(
+        "child status {status:?}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(aborted(&status), "child must have aborted; {details}");
     let mut script = Script::default();
     let mut ws = Workspace::new(
         Some(RecoveryStore::open(data.path()).unwrap()),
