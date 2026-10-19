@@ -1160,12 +1160,11 @@ impl NoteStrikeApp {
         let mut answer: Option<Answer> = None;
         let modal = egui::Modal::new(egui::Id::new("notestrike-prompt")).show(ctx, |ui| {
             ui.set_max_width(460.0);
-            let buttons: Vec<(&str, Answer)>;
-            match &prompt {
+            let buttons: Vec<(&str, Answer)> = match &prompt {
                 Prompt::UnsavedTab { tab } => {
                     ui.heading("Unsaved changes");
                     ui.label(format!("Do you want to save changes to {}?", title_of(&self.ws, *tab)));
-                    buttons = vec![("Save", Answer::Save), ("Don't save", Answer::DontSave), ("Cancel", Answer::Cancel)];
+                    vec![("Save", Answer::Save), ("Don't save", Answer::DontSave), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::UnsavedOnQuit { tabs } => {
                     ui.heading("Unsaved changes");
@@ -1173,7 +1172,7 @@ impl NoteStrikeApp {
                     for id in tabs {
                         ui.label(format!("  •  {}", title_of(&self.ws, *id)));
                     }
-                    buttons = vec![("Save all", Answer::SaveAll), ("Don't save", Answer::DiscardAll), ("Cancel", Answer::Cancel)];
+                    vec![("Save all", Answer::SaveAll), ("Don't save", Answer::DiscardAll), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::ChangedOnDisk { save } => {
                     ui.heading("File changed on disk");
@@ -1181,7 +1180,7 @@ impl NoteStrikeApp {
                         "{} was changed or removed by another program after you opened it. Overwrite it with your version, save your version under a new name, or cancel.",
                         title_of(&self.ws, save.tab)
                     ));
-                    buttons = vec![("Overwrite", Answer::Overwrite), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                    vec![("Overwrite", Answer::Overwrite), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::LossySave { save } => {
                     let tab = self.ws.tab(save.tab);
@@ -1192,12 +1191,12 @@ impl NoteStrikeApp {
                         tab.map_or(0, |t| t.invalid_sequences),
                         tab.map_or("UTF-8", |t| t.encoding.label())
                     ));
-                    buttons = vec![("Save anyway", Answer::SaveAnyway), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                    vec![("Save anyway", Answer::SaveAnyway), ("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::Unrepresentable { details, .. } => {
                     ui.heading("Characters cannot be saved");
                     ui.label(format!("{details}. Nothing was written."));
-                    buttons = vec![("Save as UTF-8", Answer::UseUtf8), ("Cancel", Answer::Cancel)];
+                    vec![("Save as UTF-8", Answer::UseUtf8), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::ReadOnly { save } => {
                     ui.heading("Read-only file");
@@ -1205,7 +1204,7 @@ impl NoteStrikeApp {
                         "{} is read-only. Save your changes under a new name?",
                         title_of(&self.ws, save.tab)
                     ));
-                    buttons = vec![("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)];
+                    vec![("Save as…", Answer::SaveAs), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::LargeFile { path, size } => {
                     ui.heading("Large file");
@@ -1214,7 +1213,7 @@ impl NoteStrikeApp {
                         path.display(),
                         human_size(*size)
                     ));
-                    buttons = vec![("Open anyway", Answer::OpenAnyway), ("Cancel", Answer::Cancel)];
+                    vec![("Open anyway", Answer::OpenAnyway), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::ConfirmReload { tab, encoding } => {
                     ui.heading("Discard unsaved changes?");
@@ -1223,7 +1222,7 @@ impl NoteStrikeApp {
                         title_of(&self.ws, *tab),
                         encoding.map(|e| format!(" as {}", e.label())).unwrap_or_default()
                     ));
-                    buttons = vec![("Reload", Answer::Reload), ("Cancel", Answer::Cancel)];
+                    vec![("Reload", Answer::Reload), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::Recovery { orphans } => {
                     ui.heading("Recover unsaved work");
@@ -1238,7 +1237,7 @@ impl NoteStrikeApp {
                                 .on_hover_text(&location);
                         }
                     });
-                    buttons = vec![("Restore", Answer::Restore), ("Discard…", Answer::Discard), ("Later", Answer::Later)];
+                    vec![("Restore", Answer::Restore), ("Discard…", Answer::Discard), ("Later", Answer::Later)]
                 }
                 Prompt::ConfirmDiscardRecovery { orphans } => {
                     ui.heading("Discard recovered text?");
@@ -1247,7 +1246,7 @@ impl NoteStrikeApp {
                         orphans.len(),
                         if orphans.len() == 1 { "y" } else { "ies" }
                     ));
-                    buttons = vec![("Discard", Answer::Discard), ("Back", Answer::Cancel)];
+                    vec![("Discard", Answer::Discard), ("Back", Answer::Cancel)]
                 }
                 Prompt::GoToLine => {
                     ui.heading("Go to line");
@@ -1264,14 +1263,14 @@ impl NoteStrikeApp {
                     if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) && let Ok(n) = parsed {
                         answer = Some(Answer::GoTo(n));
                     }
-                    buttons = vec![("Go to", Answer::GoTo(parsed.unwrap_or(0))), ("Cancel", Answer::Cancel)];
+                    vec![("Go to", Answer::GoTo(parsed.unwrap_or(0))), ("Cancel", Answer::Cancel)]
                 }
                 Prompt::Message { title, body } => {
                     ui.heading(title);
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                         ui.label(body);
                     });
-                    buttons = vec![("OK", Answer::Ok)];
+                    vec![("OK", Answer::Ok)]
                 }
                 Prompt::About => {
                     ui.vertical_centered(|ui| {
@@ -1302,9 +1301,9 @@ impl NoteStrikeApp {
                         ui.add_space(8.0);
                         ui.label(RichText::new("Built with Rust, egui/eframe, and rfd (MIT / Apache-2.0).").small().weak());
                     });
-                    buttons = vec![("OK", Answer::Ok)];
+                    vec![("OK", Answer::Ok)]
                 }
-            }
+            };
             ui.add_space(12.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Right-to-left: show buttons in reverse so the first one is leftmost.
