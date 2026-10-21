@@ -9,6 +9,8 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      STRIKE_REQUIRE_ICON: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -20,6 +22,16 @@ jobs:
         run: cargo test --locked --features native-ui -j 2
       - name: Native editor build
         run: cargo build --locked --features native-ui --bin notestrike --bin notestrike-cli -j 2
+      - name: Verify original artwork and embedded geometric icon
+        run: python scripts/verify_geometric_identity.py --svg assets/branding/NoteStrike-geometric.svg --png assets/branding/NoteStrike-geometric.png --ico assets/branding/NoteStrike-geometric.ico --original assets/branding/NoteStrike.png --original-sha256 5080e6f31e7319b14985d1dd0e6193d0241b4fc8702cf8641966f4e2a6c8b818 --exe target/debug/notestrike.exe
+      - name: Verify resource validator negative controls
+        run: python scripts/test_icon_resource_verifier.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notestrike-geometric-windows-${{ github.sha }}
+          path: target/debug/notestrike.exe
+          if-no-files-found: error
+          retention-days: 1
   linux:
     runs-on: ubuntu-latest
     steps:

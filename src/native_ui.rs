@@ -23,7 +23,7 @@ use crate::workspace::{
 };
 
 pub const APP_NAME: &str = "NoteStrike";
-pub const LOGO_PNG: &[u8] = include_bytes!("../assets/branding/NoteStrike.png");
+pub const LOGO_PNG: &[u8] = include_bytes!("../assets/branding/NoteStrike-geometric.png");
 pub const PWDS_LOGO_PNG: &[u8] = include_bytes!("../assets/branding/PWDS-logo.png");
 
 /// Native file dialogs (Windows common item dialogs via `rfd`).
@@ -1090,7 +1090,7 @@ impl NoteStrikeApp {
                 Prompt::About => {
                     ui.vertical_centered(|ui| {
                         if let Some(logo) = &self.logo {
-                            ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(96.0, 96.0)).alt_text("NoteStrike hedgehog logo"));
+                            ui.add(egui::Image::new(logo).fit_to_exact_size(egui::vec2(96.0, 96.0)).alt_text("NoteStrike geometric folded-note mark"));
                         }
                         ui.heading(format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")));
                         ui.label("A lightweight plain-text editor.");
