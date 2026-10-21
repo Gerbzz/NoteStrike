@@ -500,3 +500,28 @@ fn import_dialog_cancellation() {
     ws.import_notebook(&mut script);
     assert_eq!(ws.status, "Import cancelled.");
 }
+
+#[test]
+fn settings_round_trip_and_fall_back_to_defaults() {
+    use notestrike::workspace::ThemeChoice;
+    let dir = TempDir::new("settings");
+    let path = dir.join("settings.json");
+    assert_eq!(Settings::load(&path), Settings::default(), "missing file");
+    assert_eq!(Settings::default().theme, ThemeChoice::System);
+    for theme in [ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::System] {
+        let settings = Settings {
+            theme,
+            word_wrap: false,
+            zoom_percent: 150,
+            status_bar: false,
+        };
+        settings.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), settings);
+    }
+    fs::write(&path, b"{not json").unwrap();
+    assert_eq!(Settings::load(&path), Settings::default(), "corrupt file");
+    fs::write(&path, br#"{"theme":"purple","zoom_percent":9000}"#).unwrap();
+    let odd = Settings::load(&path);
+    assert_eq!(odd.theme, ThemeChoice::System);
+    assert_eq!(odd.zoom_percent, Settings::ZOOM_MAX);
+}
