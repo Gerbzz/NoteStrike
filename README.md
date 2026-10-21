@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/branding/NoteStrike.png" alt="NoteStrike hedgehog logo" width="128" height="128">
+  <img src="assets/branding/NoteStrike-geometric.svg" alt="NoteStrike: three text strips turn into a folded note" width="128" height="128">
 </p>
 
 <h1 align="center">NoteStrike</h1>
