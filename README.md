@@ -11,9 +11,9 @@ Tabs, safe saves, encodings and line endings handled honestly, and your unsaved 
   Status: <strong>alpha</strong> · Platform tested: Windows 11 · Part of the PWDS Strike suite
 </p>
 
-![NoteStrike editing a sample checklist in the light theme, with two tabs and the status bar showing line, column, line endings and encoding](assets/screenshots/notestrike-editor-light.png)
+![NoteStrike native editor in the dark theme with fixture.txt open, showing sample project notes, menus, a tab and the status bar](assets/screenshots/notestrike-editor-native-2026-10-21.png)
 
-*Real NoteStrike window, captured from the current build with sample text (see [screenshot notes](#screenshots)).*
+*Native editor capture from hosted Linux CI on 21 October 2026, using synthetic sample text. The captured tree became main through PR #7; this documentation update leaves application source unchanged. The image shows the editor content area; OS chrome, taskbar and application icon are outside the frame. [Capture provenance and historical screenshots](docs/screenshots.md).*
 
 ## Why NoteStrike
 
@@ -58,11 +58,9 @@ Everything in this list is implemented and covered by automated tests (see [Veri
 
 ## Screenshots
 
-| Damaged UTF-8 file, dark theme | Narrow window | Recovery after a crash |
-|---|---|---|
-| ![Dark theme showing a notice about one undecodable byte with Reopen as Windows-1252 and Reopen as UTF-16 LE buttons, plus a mixed line endings notice](assets/screenshots/notestrike-damaged-utf8-dark.png) | ![NoteStrike at 420 pixels wide with word-wrapped sample text](assets/screenshots/notestrike-compact.png) | ![Recover unsaved work dialog listing an untitled document with Restore, Discard and Later buttons](assets/screenshots/notestrike-crash-recovery.png) |
+The current native editor image above comes from [Linux job 119151963900](https://github.com/Gerbzz/NoteStrike/actions/runs/39579103581/job/119151963900). The captured tree became main at `7ec3e481`; this documentation update changes no application source. It shows a real eframe editor rendering a 73-character UTF-8/LF fixture in the dark theme.
 
-All four screenshots are real frames of the current build. The app's own `--capture` mode rendered each one and saved it at the window's size. They are not mockups. All text in them is sample content written for the screenshots. The recovery dialog shows a journal left by a process that really aborted mid-session. [docs/screenshots.md](docs/screenshots.md) records the exact commands and hashes.
+The earlier light-theme, damaged-file, narrow-window and recovery captures are retained as [historical examples](docs/screenshots.md#historical-windows-captures), with their original commands and hashes. They are not presented as the current UI.
 
 ## Keyboard shortcuts
 
@@ -120,7 +118,7 @@ The tests (51 passing, plus one helper that a test runs as a child process) crea
 
 ## Limitations
 
-- **Tested on Windows 11 only.** The code builds for Linux and macOS through eframe, but those platforms have not been run.
+- **Windows 11 is the primary target.** Hosted Linux CI has passed tests, a native editor build and the populated editor capture above. This does not establish a full Linux desktop walkthrough; macOS remains unverified.
 - **Not a large-file editor.** The whole file stays in memory and is laid out by egui; a few MB is comfortable, and files over 64 MiB are refused.
 - **Mixed line endings** are unified to the dominant style on save (you are told when the file opens).
 - **Saving replaces the file** through a rename. This keeps the content safe, but a hard link to the old file keeps the old content, and Windows ACLs or alternate data streams on the original file are not copied.
@@ -142,13 +140,14 @@ The tests (51 passing, plus one helper that a test runs as a child process) crea
 | Installer, file associations, "Open with" | Planned |
 | Session restore after normal exit, recent files | Planned |
 | Printing | Planned |
-| Linux and macOS verification | Planned |
+| Linux and macOS verification | Hosted Linux tests, native build and editor capture passed; broader Linux desktop and macOS verification remain planned |
 
 ## Credits and licenses
 
 - Built with [egui / eframe](https://github.com/emilk/egui) (MIT OR Apache-2.0), [rfd](https://github.com/PolyMeilex/rfd) (MIT) for native file dialogs, [image](https://github.com/image-rs/image) (MIT OR Apache-2.0), [sha2](https://github.com/RustCrypto/hashes) (MIT OR Apache-2.0), [uuid](https://github.com/uuid-rs/uuid) (MIT OR Apache-2.0), [serde_json](https://github.com/serde-rs/json) (MIT OR Apache-2.0), and [same-file](https://github.com/BurntSushi/same-file) (MIT OR Unlicense). The full dependency graph is in `Cargo.lock`.
 - On Windows, NoteStrike uses the Segoe UI and Consolas fonts already installed with the system; it does not bundle them. egui's built-in fonts are the fallback.
 - The README layout takes inspiration from [PhotoCraft](https://github.com/storytold/photocraft) and [ArtCraft](https://getartcraft.com/): a short pitch, highlights, real screenshots with captions, and a frank status section. No code, text, or assets were copied from either project.
-- The NoteStrike hedgehog logo is original Strike suite artwork ([provenance](assets/branding/provenance.json)). The [PWDS logo](assets/branding/PWDS-logo.png) appears only in Help > About.
+- The geometric NoteStrike mark is original Strike suite artwork ([identity notes](assets/branding/GEOMETRIC-IDENTITY.md)). Historical hedgehog artwork and its [provenance](assets/branding/provenance.json) are preserved. The [PWDS logo](assets/branding/PWDS-logo.png) appears only in Help > About.
 
 NoteStrike is a [ProWebDevSolutions](https://prowebdevsolutions.com) project. This checkout makes no first-party license grant. See [SOURCE_SCOPE.md](SOURCE_SCOPE.md).
+
